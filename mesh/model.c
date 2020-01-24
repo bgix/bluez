@@ -25,6 +25,7 @@
 #include "mesh/appkey.h"
 #include "mesh/cfgmod.h"
 #include "mesh/prv-beacon.h"
+#include "mesh/remprv.h"
 #include "mesh/error.h"
 #include "mesh/dbus.h"
 #include "mesh/util.h"
@@ -78,6 +79,9 @@ static bool is_internal(uint32_t id)
 		return true;
 
 	if (id == PRV_BEACON_SRV_MODEL || id == PRV_BEACON_CLI_MODEL)
+		return true;
+
+	if (id == REM_PROV_SRV_MODEL || id == REM_PROV_CLI_MODEL)
 		return true;
 
 	return false;

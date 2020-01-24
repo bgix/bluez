@@ -31,6 +31,7 @@
 #include "mesh/model.h"
 #include "mesh/cfgmod.h"
 #include "mesh/prv-beacon.h"
+#include "mesh/remprv.h"
 #include "mesh/util.h"
 #include "mesh/error.h"
 #include "mesh/dbus.h"
@@ -502,6 +503,9 @@ static bool init_from_storage(struct mesh_config_node *db_node,
 
 	/* Initialize Private Beacon server model */
 	prv_beacon_server_init(node, PRIMARY_ELE_IDX);
+
+	/* Initialize remote provision server model */
+	remote_prov_server_init(node, PRIMARY_ELE_IDX);
 
 	node->cfg = cfg;
 
@@ -1224,6 +1228,7 @@ static bool get_element_properties(struct mesh_node *node, const char *path,
 	if (ele->idx == PRIMARY_ELE_IDX) {
 		mesh_model_add(node, ele->models, CONFIG_SRV_MODEL, NULL);
 		mesh_model_add(node, ele->models, PRV_BEACON_SRV_MODEL, NULL);
+		mesh_model_add(node, ele->models, REM_PROV_SRV_MODEL, NULL);
 	}
 
 	return true;
@@ -1330,8 +1335,9 @@ static bool add_local_node(struct mesh_node *node, uint16_t unicast, bool kr,
 
 	init_net_settings(node);
 
-	/* Initialize configuration server model */
+	/* Initialize internal server models */
 	cfgmod_server_init(node, PRIMARY_ELE_IDX);
+	remote_prov_server_init(node, PRIMARY_ELE_IDX);
 
 	/* Initialize Private Beacon server model */
 	prv_beacon_server_init(node, PRIMARY_ELE_IDX);

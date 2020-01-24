@@ -39,7 +39,7 @@ enum mesh_prov_mode {
 
 struct mesh_prov;
 
-typedef void (*prov_trans_tx_t)(void *trans_data, void *data, uint16_t len);
+typedef void (*prov_trans_tx_t)(void *tx_data, const void *data, uint16_t len);
 typedef void (*mesh_prov_open_func_t)(void *user_data, prov_trans_tx_t trans_tx,
 					void *trans_data, uint8_t trans_type);
 
