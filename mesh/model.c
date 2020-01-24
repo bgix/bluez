@@ -24,6 +24,7 @@
 #include "mesh/net.h"
 #include "mesh/appkey.h"
 #include "mesh/cfgmod.h"
+#include "mesh/remprv.h"
 #include "mesh/error.h"
 #include "mesh/dbus.h"
 #include "mesh/util.h"
@@ -74,6 +75,9 @@ static struct l_queue *mesh_virtuals;
 static bool is_internal(uint32_t id)
 {
 	if (id == CONFIG_SRV_MODEL || id == CONFIG_CLI_MODEL)
+		return true;
+
+	if (id == REM_PROV_SRV_MODEL || id == REM_PROV_CLI_MODEL)
 		return true;
 
 	return false;
