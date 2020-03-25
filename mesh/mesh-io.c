@@ -76,7 +76,7 @@ struct mesh_io *mesh_io_new(enum mesh_io_type type, void *opts,
 	if (!io_list)
 		io_list = l_queue_new();
 
-	if (l_queue_push_head(io_list, io))
+	if (l_queue_push_tail(io_list, io))
 		return io;
 
 fail:
@@ -118,6 +118,9 @@ bool mesh_io_register_recv_cb(struct mesh_io *io, const uint8_t *filter,
 {
 	io = l_queue_find(io_list, match_by_io, io);
 
+	if (!io)
+		io = l_queue_peek_head(io_list);
+
 	if (io && io->api && io->api->reg)
 		return io->api->reg(io, filter, len, cb, user_data);
 
@@ -128,6 +131,9 @@ bool mesh_io_deregister_recv_cb(struct mesh_io *io, const uint8_t *filter,
 								uint8_t len)
 {
 	io = l_queue_find(io_list, match_by_io, io);
+
+	if (!io)
+		io = l_queue_peek_head(io_list);
 
 	if (io && io->api && io->api->dereg)
 		return io->api->dereg(io, filter, len);
@@ -153,6 +159,9 @@ bool mesh_io_send_cancel(struct mesh_io *io, const uint8_t *pattern,
 								uint8_t len)
 {
 	io = l_queue_find(io_list, match_by_io, io);
+
+	if (!io)
+		io = l_queue_peek_head(io_list);
 
 	if (io && io->api && io->api->cancel)
 		return io->api->cancel(io, pattern, len);
