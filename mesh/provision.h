@@ -100,6 +100,10 @@ typedef bool (*mesh_prov_initiator_complete_func_t)(void *user_data,
 					uint8_t status,
 					struct mesh_prov_node_info *info);
 
+typedef void (*mesh_prov_initiator_scan_result_t)(void *user_data,
+					uint16_t server, bool extended,
+					const uint8_t *data, uint16_t len);
+
 /* This starts unprovisioned device beacon */
 bool acceptor_start(uint8_t num_ele, uint8_t uuid[16],
 			uint16_t algorithms, uint32_t timeout,
@@ -109,6 +113,8 @@ bool acceptor_start(uint8_t num_ele, uint8_t uuid[16],
 void acceptor_cancel(void *user_data);
 
 bool initiator_start(enum trans_type transport,
+		uint16_t server,
+		uint16_t svr_idx,
 		uint8_t uuid[16],
 		uint16_t max_ele,
 		uint32_t timeout, /* in seconds from mesh.conf */
@@ -119,3 +125,7 @@ bool initiator_start(enum trans_type transport,
 		void *node, void *caller_data);
 void initiator_prov_data(uint16_t net_idx, uint16_t primary, void *caller_data);
 void initiator_cancel(void *caller_data);
+
+void initiator_scan_reg(mesh_prov_initiator_scan_result_t scan_result,
+							void *user_data);
+void initiator_scan_unreg(void *caller_data);
