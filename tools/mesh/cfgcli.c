@@ -409,6 +409,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 	struct model_pub pub;
 	int n;
 	struct pending_req *req;
+	bool saved = false;
 
 	if (mesh_opcode_get(data, len, &opcode, &n)) {
 		len -= n;
@@ -432,20 +433,19 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 
 	case OP_DEV_COMP_STATUS:
 		if (len < MIN_COMPOSITION_LEN)
-			break;
+			return true;
 
 		print_composition(data, len);
 
-		if (!mesh_db_node_set_composition(src, data, len))
-			bt_shell_printf("Failed to save node composition!\n");
-		else
+		saved = mesh_db_node_set_composition(src, data, len);
+		if (saved)
 			remote_set_composition(src, true);
 
 		break;
 
 	case OP_APPKEY_STATUS:
 		if (len != 4)
-			break;
+			return true;
 
 		bt_shell_printf("Node %4.4x AppKey status %s\n", src,
 						mesh_status_str(data[0]));
@@ -456,23 +456,22 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		bt_shell_printf("AppKey\t%u (0x%3.3x)\n", app_idx, app_idx);
 
 		if (data[0] != MESH_STATUS_SUCCESS)
-			break;
+			return true;
 
 		if (!cmd)
-			break;
+			return true;
 
 		if (cmd->opcode == OP_APPKEY_ADD)
-			remote_add_app_key(src, app_idx, true);
+			saved = remote_add_app_key(src, app_idx, true);
 		else if (cmd->opcode == OP_APPKEY_DELETE)
-			remote_del_app_key(src, app_idx);
+			saved = remote_del_app_key(src, app_idx);
 		else if (cmd->opcode == OP_APPKEY_UPDATE)
-			remote_update_app_key(src, app_idx, true, true);
-
+			saved = remote_update_app_key(src, app_idx, true, true);
 		break;
 
 	case OP_APPKEY_LIST:
 		if (len < 3)
-			break;
+			return true;
 
 		bt_shell_printf("AppKey List (node %4.4x) Status %s\n",
 						src, mesh_status_str(data[0]));
@@ -482,16 +481,16 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		len -= 3;
 
 		if (data[0] != MESH_STATUS_SUCCESS)
-			break;
+			return true;
 
 		data += 3;
 		print_appkey_list(len, data);
 
-		break;
+		return true;
 
 	case OP_NETKEY_STATUS:
 		if (len != 3)
-			break;
+			return true;
 
 		bt_shell_printf("Node %4.4x NetKey status %s\n", src,
 						mesh_status_str(data[0]));
@@ -500,23 +499,23 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		bt_shell_printf("\tNetKey %u (0x%3.3x)\n", net_idx, net_idx);
 
 		if (data[0] != MESH_STATUS_SUCCESS)
-			break;
+			return true;
 
 		if (!cmd)
-			break;
+			return true;
 
 		if (cmd->opcode == OP_NETKEY_ADD)
-			remote_add_net_key(src, net_idx, true);
+			saved = remote_add_net_key(src, net_idx, true);
 		else if (cmd->opcode == OP_NETKEY_DELETE)
-			remote_del_net_key(src, net_idx);
+			saved = remote_del_net_key(src, net_idx);
 		else if (cmd->opcode == OP_NETKEY_UPDATE)
-			remote_update_net_key(src, net_idx, true, true);
+			saved = remote_update_net_key(src, net_idx, true, true);
 
 		break;
 
 	case OP_NETKEY_LIST:
 		if (len < 2)
-			break;
+			return true;
 
 		bt_shell_printf("NetKey List (node %4.4x):\n", src);
 
@@ -534,11 +533,11 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 			bt_shell_printf("\t %u (0x%3.3x)\n", net_idx, net_idx);
 		}
 
-		break;
+		return true;
 
 	case OP_CONFIG_KEY_REFRESH_PHASE_STATUS:
 		if (len != 4)
-			break;
+			return true;
 
 		bt_shell_printf("Node %4.4x Key Refresh Phase status %s\n", src,
 						mesh_status_str(data[0]));
@@ -550,14 +549,16 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		if (data[0] != MESH_STATUS_SUCCESS)
 			return true;
 
-		if (data[3] == KEY_REFRESH_PHASE_NONE)
-			remote_finish_key_refresh(src, net_idx);
+		if (data[3] != KEY_REFRESH_PHASE_NONE)
+			return true;
+
+		saved = remote_finish_key_refresh(src, net_idx);
 
 		break;
 
 	case OP_MODEL_APP_STATUS:
 		if (len != 7 && len != 9)
-			break;
+			return true;
 
 		bt_shell_printf("Node %4.4x: Model App status %s\n", src,
 						mesh_status_str(data[0]));
@@ -571,14 +572,14 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		bt_shell_printf("AppIdx\t\t%u (0x%3.3x)\n ", app_idx, app_idx);
 
 		if (data[0] != MESH_STATUS_SUCCESS || !cmd)
-			break;
+			return true;
 
 		if (cmd->opcode == OP_MODEL_APP_BIND)
-			mesh_db_node_model_bind(src, addr, len == 9, mod_id,
-								app_idx);
+			saved = mesh_db_node_model_bind(src, addr, len == 9,
+							mod_id, app_idx);
 		else
-			mesh_db_node_model_unbind(src, addr, len == 9, mod_id,
-								app_idx);
+			saved = mesh_db_node_model_unbind(src, addr, len == 9,
+							mod_id, app_idx);
 
 		break;
 
@@ -589,7 +590,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		bt_shell_printf("NetIdx %4.4x, NodeIdState 0x%02x, status %s\n",
 				get_le16(data + 1), data[3],
 				mesh_status_str(data[0]));
-		break;
+		return true;
 
 	case OP_CONFIG_BEACON_STATUS:
 		if (len != 1)
@@ -628,7 +629,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 			return true;
 
 		bt_shell_printf("Node %4.4x Default TTL %d\n", src, data[0]);
-		mesh_db_node_ttl_set(src, data[0]);
+		saved = mesh_db_node_ttl_set(src, data[0]);
 
 		break;
 
@@ -682,15 +683,18 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		if (IS_VIRTUAL(pub.u.addr)) {
 			grp = l_queue_find(groups, match_group_addr,
 						L_UINT_TO_PTR(pub.u.addr));
-			if (!grp)
+			if (!grp) {
+				bt_shell_printf("Unkown virtual group\n");
 				return true;
+			}
 
 			memcpy(pub.u.label, grp->label, sizeof(pub.u.label));
 
 		}
 
-		mesh_db_node_model_set_pub(src, ele_addr, len == 14, mod_id,
-						&pub, IS_VIRTUAL(pub.u.addr));
+		saved = mesh_db_node_model_set_pub(src, ele_addr, len == 14,
+							mod_id, &pub,
+							IS_VIRTUAL(pub.u.addr));
 
 		break;
 
@@ -720,34 +724,36 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		default:
 			return true;
 		case OP_CONFIG_MODEL_SUB_ADD:
-			mesh_db_node_model_add_sub(src, ele_addr, len == 9,
-								mod_id, addr);
+			saved = mesh_db_node_model_add_sub(src, ele_addr,
+							len == 9, mod_id, addr);
 			break;
 		case OP_CONFIG_MODEL_SUB_DELETE:
-			mesh_db_node_model_del_sub(src, ele_addr, len == 9,
-								mod_id, addr);
+			saved = mesh_db_node_model_del_sub(src, ele_addr,
+							len == 9, mod_id, addr);
 			break;
 		case OP_CONFIG_MODEL_SUB_OVERWRITE:
-			mesh_db_node_model_overwrt_sub(src, ele_addr, len == 9,
-								mod_id, addr);
+			saved = mesh_db_node_model_overwrt_sub(src, ele_addr,
+							len == 9, mod_id, addr);
 			break;
 		case OP_CONFIG_MODEL_SUB_DELETE_ALL:
-			mesh_db_node_model_del_sub_all(src, ele_addr, len == 9,
-									mod_id);
+			saved = mesh_db_node_model_del_sub_all(src, ele_addr,
+							len == 9, mod_id);
 			break;
 		case OP_CONFIG_MODEL_SUB_VIRT_ADD:
 			if (grp)
-				mesh_db_node_model_add_sub_virt(src, ele_addr,
-						len == 9, mod_id, grp->label);
+				saved = mesh_db_node_model_add_sub_virt(src,
+							ele_addr, len == 9,
+							mod_id, grp->label);
 			break;
 		case OP_CONFIG_MODEL_SUB_VIRT_DELETE:
 			if (grp)
-				mesh_db_node_model_del_sub_virt(src, ele_addr,
-						len == 9, mod_id, grp->label);
+				saved = mesh_db_node_model_del_sub_virt(src,
+							ele_addr, len == 9,
+							mod_id, grp->label);
 			break;
 		case OP_CONFIG_MODEL_SUB_VIRT_OVERWRITE:
 			if (grp)
-				mesh_db_node_model_overwrt_sub_virt(src,
+				saved = mesh_db_node_model_overwrt_sub_virt(src,
 							ele_addr, len == 9,
 							mod_id, grp->label);
 			break;
@@ -761,14 +767,14 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 			return true;
 
 		print_sub_list(src, false, data, len);
-		break;
+		return true;
 
 	case OP_CONFIG_VEND_MODEL_SUB_LIST:
 		if (len < 7)
 			return true;
 
 		print_sub_list(src, true, data, len);
-		break;
+		return true;
 
 	/* Per Mesh Profile 4.3.2.50 */
 	case OP_MODEL_APP_LIST:
@@ -784,8 +790,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		data += 5;
 		len -= 5;
 		print_appkey_list(len, data);
-
-		break;
+		return true;
 
 	case OP_VEND_MODEL_APP_LIST:
 		if (len < 7)
@@ -803,8 +808,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		data += 7;
 		len -= 7;
 		print_appkey_list(len, data);
-
-		break;
+		return true;
 
 	/* Per Mesh Profile 4.3.2.63 */
 	case OP_CONFIG_HEARTBEAT_PUB_STATUS:
@@ -854,7 +858,7 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 		bt_shell_printf("Node %4.4x is reset\n", src);
 		reset_remote_node(src);
 
-		break;
+		return true;
 
 	/* Per Mesh Profile 4.3.2.57 */
 	case OP_CONFIG_FRIEND_STATUS:
@@ -865,6 +869,9 @@ static bool msg_recvd(uint16_t src, uint16_t idx, uint8_t *data,
 				src, data[0]);
 		break;
 	}
+
+	if (!saved)
+		bt_shell_printf("Warning: Configuration not updated\n");
 
 	return true;
 }
