@@ -43,6 +43,9 @@
 
 #define CFG_SRV_MODEL	0x0000
 #define CFG_CLI_MODEL	0x0001
+#define PRV_BEACON_SVR	0x0008
+#define PRV_BEACON_CLI	0x0009
+#define RPR_SVR_MODEL	0xFFFF0004
 
 #define UNPROV_SCAN_MAX_SECS	300
 
@@ -83,8 +86,12 @@ struct meshcfg_node {
 
 struct unprov_device {
 	time_t last_seen;
-	int16_t rssi;
+	int id;
+	uint32_t uri_hash;
 	uint8_t uuid[16];
+	int16_t rssi;
+	uint16_t server;
+	uint16_t oob_info;
 };
 
 struct generic_request {
@@ -96,8 +103,16 @@ struct generic_request {
 	const char *str;
 };
 
+struct scan_data {
+	uint16_t dst;
+	uint16_t secs;
+};
+
+static void *finalized = L_UINT_TO_PTR(-1);
+
 static struct l_dbus *dbus;
 
+static struct l_timeout *scan_timeout;
 static struct l_queue *node_proxies;
 static struct l_dbus_proxy *net_proxy;
 static struct meshcfg_node *local;
@@ -187,23 +202,57 @@ static bool parse_argument_on_off(int argc, char *argv[], bool *value)
 static bool match_device_uuid(const void *a, const void *b)
 {
 	const struct unprov_device *dev = a;
-	const uint8_t *uuid = b;
 
-	return (memcmp(dev->uuid, uuid, 16) == 0);
+	if (a == finalized)
+		return false;
+
+	return memcmp(dev->uuid, b, 16) == 0;
+}
+
+static bool match_by_id(const void *a, const void *b)
+{
+	const struct unprov_device *dev = a;
+	int id = L_PTR_TO_UINT(b);
+
+	if (a == finalized)
+		return false;
+
+	l_info("test %d %d", dev->id, id);
+	return dev->id == id;
+}
+
+static bool match_by_srv_uuid(const void *a, const void *b)
+{
+	const struct unprov_device *dev = a;
+	const struct unprov_device *new_dev = b;
+
+	if (a == finalized)
+		return false;
+
+	return (dev->server == new_dev->server) &&
+				(memcmp(dev->uuid, new_dev->uuid, 16) == 0);
 }
 
 static void print_device(void *a, void *b)
 {
-	const struct unprov_device *dev = a;
-	struct tm *tm = localtime(&dev->last_seen);
+	struct unprov_device *dev = a;
+	int *cnt = b;
+	struct tm *tm;
 	char buf[80];
 	char *str;
 
-	assert(strftime(buf, sizeof(buf), "%c", tm));
+	if (a == finalized)
+		return;
 
+	tm = localtime(&dev->last_seen);
+	assert(strftime(buf, sizeof(buf), "%c", tm));
+	(*cnt)++;
+
+	dev->id = *cnt;
 	str = l_util_hexstring_upper(dev->uuid, sizeof(dev->uuid));
-	bt_shell_printf("UUID: %s, RSSI %d, Seen: %s\n",
-			str, dev->rssi, buf);
+	bt_shell_printf(COLOR_YELLOW "#%d" COLOR_OFF
+			" UUID: %s, RSSI %d, Server: %4.4x\n Seen: %s\n",
+			*cnt, str, dev->rssi, dev->server, buf);
 
 	l_free(str);
 }
@@ -772,15 +821,56 @@ static void scan_reply(struct l_dbus_proxy *proxy, struct l_dbus_message *msg,
 
 static void scan_setup(struct l_dbus_message *msg, void *user_data)
 {
-	uint16_t secs = (uint16_t) L_PTR_TO_UINT(user_data);
+	struct scan_data *data = user_data;
 	struct l_dbus_message_builder *builder;
 
 	builder = l_dbus_message_builder_new(msg);
 	l_dbus_message_builder_enter_array(builder, "{sv}");
-	append_dict_entry_basic(builder, "Seconds", "q", &secs);
+	append_dict_entry_basic(builder, "Seconds", "q", &data->secs);
+	append_dict_entry_basic(builder, "Server", "q", &data->dst);
 	l_dbus_message_builder_leave_array(builder);
 	l_dbus_message_builder_finalize(builder);
 	l_dbus_message_builder_destroy(builder);
+
+	/* Destination info not needed after call */
+	l_free(data);
+}
+
+static void scan_start(void *user_data, uint16_t dst, uint32_t model)
+{
+	struct scan_data *data;
+
+	if (model != RPR_SVR_MODEL)
+		return;
+
+	data = l_malloc(sizeof(struct scan_data));
+	data->secs = L_PTR_TO_UINT(user_data);
+	data->dst = dst;
+
+	if (!l_dbus_proxy_method_call(local->mgmt_proxy, "UnprovisionedScan",
+					scan_setup, scan_reply, data, NULL))
+		l_free(data);
+}
+
+static void scan_to(struct l_timeout *timeout, void *user_data)
+{
+	int cnt = 0;
+
+	if (l_queue_peek_head(devices) != finalized)
+		l_queue_push_head(devices, finalized);
+
+	l_timeout_remove(timeout);
+	scan_timeout = NULL;
+	bt_shell_printf(COLOR_YELLOW "Unprovisioned devices:\n" COLOR_OFF);
+	l_queue_foreach(devices, print_device, &cnt);
+}
+
+static void free_devices(void *a)
+{
+	if (a == finalized)
+		return;
+
+	l_free(a);
 }
 
 static void cmd_scan_unprov(int argc, char *argv[])
@@ -798,21 +888,28 @@ static void cmd_scan_unprov(int argc, char *argv[])
 		return bt_shell_noninteractive_quit(EXIT_FAILURE);
 	}
 
-	if (argc == 3)
+	if (argc == 3) {
 		sscanf(argv[2], "%u", &secs);
 
-	if (secs > UNPROV_SCAN_MAX_SECS)
-		secs = UNPROV_SCAN_MAX_SECS;
+		if (secs > UNPROV_SCAN_MAX_SECS)
+			secs = UNPROV_SCAN_MAX_SECS;
+	} else
+		secs = 60;
 
-	if (enable)
-		l_dbus_proxy_method_call(local->mgmt_proxy, "UnprovisionedScan",
-						scan_setup, scan_reply,
-						L_UINT_TO_PTR(secs), NULL);
-	else
+	l_timeout_remove(scan_timeout);
+	scan_timeout = NULL;
+
+	if (enable) {
+		l_queue_clear(devices, free_devices);
+		remote_foreach_model(scan_start, L_UINT_TO_PTR(secs));
+		scan_timeout = l_timeout_create(secs, scan_to, NULL, NULL);
+	} else {
+		/* Mark devices queue as finalized */
+		l_queue_push_head(devices, finalized);
 		l_dbus_proxy_method_call(local->mgmt_proxy,
 						"UnprovisionedScanCancel",
 						NULL, NULL, NULL, NULL);
-
+	}
 }
 
 static uint8_t *parse_key(struct l_dbus_message_iter *iter, uint16_t id,
@@ -1008,8 +1105,10 @@ static void cmd_export_db(int argc, char *argv[])
 
 static void cmd_list_unprov(int argc, char *argv[])
 {
+	int cnt = 0;
+
 	bt_shell_printf(COLOR_YELLOW "Unprovisioned devices:\n" COLOR_OFF);
-	l_queue_foreach(devices, print_device, NULL);
+	l_queue_foreach(devices, print_device, &cnt);
 }
 
 static void cmd_list_nodes(int argc, char *argv[])
@@ -1485,30 +1584,23 @@ static void add_node_reply(struct l_dbus_proxy *proxy,
 
 static void add_node_setup(struct l_dbus_message *msg, void *user_data)
 {
-	char *str = user_data;
-	size_t sz;
-	unsigned char *uuid;
+	struct unprov_device *dev = user_data;
 	struct l_dbus_message_builder *builder;
 
-	uuid = l_util_from_hexstring(str, &sz);
-	if (!uuid || sz != 16 || !l_uuid_is_valid(uuid)) {
-		l_error("Failed to generate UUID array from %s", str);
-		return;
-	}
-
 	builder = l_dbus_message_builder_new(msg);
-	append_byte_array(builder, uuid, 16);
+	append_byte_array(builder, dev->uuid, 16);
 	l_dbus_message_builder_enter_array(builder, "{sv}");
 	/* TODO: populate with options when defined */
 	l_dbus_message_builder_leave_array(builder);
 	l_dbus_message_builder_finalize(builder);
 	l_dbus_message_builder_destroy(builder);
-
-	l_free(uuid);
 }
 
 static void cmd_start_prov(int argc, char *argv[])
 {
+	struct unprov_device *dev = NULL;
+	int id;
+
 	if (!local || !local->proxy || !local->mgmt_proxy) {
 		bt_shell_printf("Node is not attached\n");
 		return;
@@ -1519,14 +1611,47 @@ static void cmd_start_prov(int argc, char *argv[])
 		return;
 	}
 
-	if (!argv[1] || (strlen(argv[1]) != 32)) {
+	if (!argv[1]) {
+		bt_shell_printf(COLOR_RED "Requires UUID\n" COLOR_RED);
+		return;
+	}
+
+	if (*(argv[1]) == '#') {
+		if (sscanf(argv[1] + 1, "%d", &id) == 1)
+			dev = l_queue_find(devices, match_by_id,
+							L_UINT_TO_PTR(id));
+
+		if (!dev) {
+			bt_shell_printf(COLOR_RED "unknown id\n" COLOR_RED);
+			return;
+		}
+	} else if (strlen(argv[1]) == 32) {
+		size_t sz;
+		uint8_t *uuid = l_util_from_hexstring(argv[1], &sz);
+
+		if (sz != 16) {
+			bt_shell_printf(COLOR_RED "Invalid UUID\n" COLOR_RED);
+			return;
+		}
+
+		dev = l_queue_find(devices, match_device_uuid, uuid);
+
+		if (!dev) {
+			dev = l_new(struct unprov_device, 1);
+			memcpy(dev->uuid, uuid, 16);
+			l_queue_push_tail(devices, dev);
+		}
+
+		l_free(uuid);
+
+	} else {
 		bt_shell_printf(COLOR_RED "Requires UUID\n" COLOR_RED);
 		return;
 	}
 
 	if (l_dbus_proxy_method_call(local->mgmt_proxy, "AddNode",
 						add_node_setup, add_node_reply,
-						argv[1], NULL))
+						dev, NULL))
 		prov_in_progress = true;
 }
 
@@ -1736,17 +1861,34 @@ static void setup_ele_iface(struct l_dbus_interface *iface)
 	/* TODO: Other methods */
 }
 
+static int sort_rssi(const void *a, const void *b, void *user_data)
+{
+	const struct unprov_device *new_dev = a;
+	const struct unprov_device *dev = b;
+
+	if (b == finalized)
+		return 1;
+
+	return dev->rssi - new_dev->rssi;
+}
+
 static struct l_dbus_message *scan_result_call(struct l_dbus *dbus,
 						struct l_dbus_message *msg,
 						void *user_data)
 {
-	struct l_dbus_message_iter iter, opts;
+	struct l_dbus_message_iter iter, opts, var;
+	struct unprov_device result, *dev;
 	int16_t rssi;
+	uint16_t server = 0;
 	uint32_t n;
 	uint8_t *prov_data;
-	char *str;
-	struct unprov_device *dev;
+	//char *str;
+	const char *key;
 	const char *sig = "naya{sv}";
+
+	if (finalized == l_queue_peek_head(devices))
+		goto done;
+
 
 	if (!l_dbus_message_get_arguments(msg, sig, &rssi, &iter, &opts)) {
 		l_error("Cannot parse scan results");
@@ -1759,39 +1901,42 @@ static struct l_dbus_message *scan_result_call(struct l_dbus *dbus,
 		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
 	}
 
-	bt_shell_printf("Scan result:\n");
-	bt_shell_printf("\t" COLOR_GREEN "rssi = %d\n" COLOR_OFF, rssi);
-	str = l_util_hexstring_upper(prov_data, 16);
-	bt_shell_printf("\t" COLOR_GREEN "UUID = %s\n" COLOR_OFF, str);
-	l_free(str);
-
-	if (n >= 18) {
-		str = l_util_hexstring_upper(prov_data + 16, 2);
-		bt_shell_printf("\t" COLOR_GREEN "OOB = %s\n" COLOR_OFF, str);
-		l_free(str);
+	while (l_dbus_message_iter_next_entry(&opts, &key, &var)) {
+		if (!strcmp(key, "Server"))
+			l_dbus_message_iter_get_variant(&var, "q", &server);
 	}
 
-	if (n >= 22) {
-		str = l_util_hexstring_upper(prov_data + 18, 4);
-		bt_shell_printf("\t" COLOR_GREEN "URI Hash = %s\n" COLOR_OFF,
-									str);
-		l_free(str);
-	}
+	memcpy(result.uuid, prov_data, 16);
+	result.server = server;
+	result.rssi = rssi;
+	result.id = 0;
 
-	/* TODO: Handle the rest of provisioning data if present */
+	if (n > 16 && n <= 18)
+		result.oob_info = l_get_be16(prov_data + 16);
+	else
+		result.oob_info = 0;
 
-	dev = l_queue_find(devices, match_device_uuid, prov_data);
+	if (n > 18 && n <= 22)
+		result.uri_hash = l_get_be32(prov_data + 18);
+	else
+		result.uri_hash = 0;
+
+	dev = l_queue_remove_if(devices, match_by_srv_uuid, &result);
+
 	if (!dev) {
-		dev = l_new(struct unprov_device, 1);
-		memcpy(dev->uuid, prov_data, sizeof(dev->uuid));
-		/* TODO: timed self-destructor */
-		l_queue_push_tail(devices, dev);
-	}
+		bt_shell_printf("\r" COLOR_YELLOW "Results = %d\n" COLOR_OFF,
+						l_queue_length(devices) + 1);
+		dev = l_malloc(sizeof(struct unprov_device));
+		*dev = result;
 
-	/* Update with the latest rssi */
-	dev->rssi = rssi;
+	} else if (dev->rssi < result.rssi)
+		*dev = result;
+
 	dev->last_seen = time(NULL);
 
+	l_queue_insert(devices, dev, sort_rssi, NULL);
+
+done:
 	return l_dbus_message_new_method_return(msg);
 }
 
@@ -1830,8 +1975,10 @@ static void remove_device(uint8_t *uuid)
 {
 	struct unprov_device *dev;
 
-	dev = l_queue_remove_if(devices, match_device_uuid, uuid);
-	l_free(dev);
+	do {
+		dev = l_queue_remove_if(devices, match_device_uuid, uuid);
+		l_free(dev);
+	} while (dev);
 }
 
 static struct l_dbus_message *add_node_cmplt_call(struct l_dbus *dbus,
