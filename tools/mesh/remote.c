@@ -30,6 +30,12 @@ struct remote_key {
 	bool updated;
 };
 
+struct foreach_data {
+	remote_foreach_t each;
+	void *user_data;
+	uint16_t dst;
+};
+
 struct remote_node {
 	uint16_t unicast;
 	struct l_queue *net_keys;
@@ -518,6 +524,76 @@ void remote_print_all(void)
 		return;
 
 	l_queue_foreach(nodes, print_node, NULL);
+}
+
+static void each_node(void *rmt, void *user_data)
+{
+	struct remote_node *node = rmt;
+	struct foreach_data *data = user_data;
+
+	data->each(data->user_data, node->unicast, (uint32_t) -1);
+}
+
+static void each_addr(void *rmt, void *user_data)
+{
+	struct remote_node *node = rmt;
+	struct foreach_data *data = user_data;
+	uint16_t cnt;
+
+	for (cnt = 0; cnt <= node->num_ele; cnt++)
+		data->each(data->user_data, node->unicast + cnt, (uint32_t) -1);
+}
+
+static void parse_model(void *model, void *user_data)
+{
+	struct foreach_data *data = user_data;
+
+	data->each(data->user_data, data->dst, L_PTR_TO_UINT(model));
+}
+
+static void each_model(void *rmt, void *user_data)
+{
+	struct remote_node *node = rmt;
+	struct foreach_data *data = user_data;
+	uint16_t cnt;
+
+	for (cnt = 0; cnt < node->num_ele; cnt++) {
+		data->dst = node->unicast + cnt;
+		l_queue_foreach(node->els[cnt], parse_model, data);
+	}
+}
+
+void remote_foreach(remote_foreach_t each, void *user_data)
+{
+	struct foreach_data data = {
+		.each = each,
+		.user_data = user_data
+	};
+
+	if (each)
+		l_queue_foreach(nodes, each_node, &data);
+}
+
+void remote_foreach_unicast(remote_foreach_t each, void *user_data)
+{
+	struct foreach_data data = {
+		.each = each,
+		.user_data = user_data
+	};
+
+	if (each)
+		l_queue_foreach(nodes, each_addr, &data);
+}
+
+void remote_foreach_model(remote_foreach_t each, void *user_data)
+{
+	struct foreach_data data = {
+		.each = each,
+		.user_data = user_data
+	};
+
+	if (each)
+		l_queue_foreach(nodes, each_model, &data);
 }
 
 uint16_t remote_get_next_unicast(uint16_t low, uint16_t high, uint8_t ele_cnt)
