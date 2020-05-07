@@ -134,6 +134,21 @@ static void prov_disc_cb(struct l_dbus *bus, void *user_data)
 	free_pending_add_call();
 }
 
+static void append_dict_entry_basic(struct l_dbus_message_builder *builder,
+					const char *key, const char *signature,
+					const void *data)
+{
+	if (!builder)
+		return;
+
+	l_dbus_message_builder_enter_dict(builder, "sv");
+	l_dbus_message_builder_append_basic(builder, 's', key);
+	l_dbus_message_builder_enter_variant(builder, signature);
+	l_dbus_message_builder_append_basic(builder, signature[0], data);
+	l_dbus_message_builder_leave_variant(builder);
+	l_dbus_message_builder_leave_dict(builder);
+}
+
 static void send_add_failed(const char *owner, const char *path,
 							uint8_t status)
 {
@@ -472,49 +487,7 @@ static void manager_scan_result(void *user_data, uint16_t server, bool ext,
 	l_dbus_message_builder_append_basic(builder, 'n', &rssi);
 	dbus_append_byte_array(builder, data + 1, len - 1);
 	l_dbus_message_builder_enter_array(builder, "{sv}");
-	/* TODO: populate with options when defined */
-	l_dbus_message_builder_leave_array(builder);
-	l_dbus_message_builder_finalize(builder);
-	l_dbus_message_builder_destroy(builder);
-
-	l_dbus_send(dbus, msg);
-}
-
-static void prov_beacon_recv(void *user_data, struct mesh_io_recv_info *info,
-					const uint8_t *data, uint16_t len)
-{
-	struct scan_req *req = user_data;
-	struct l_dbus_message_builder *builder;
-	struct l_dbus_message *msg;
-	struct l_dbus *dbus;
-	int16_t rssi;
-
-	if (len < sizeof(req->uuid) + 2 || data[1] != 0x00)
-		return;
-
-	if (!l_queue_find(scans, by_scan, req))
-		return;
-
-	if (!memcmp(data + 2, req->uuid, sizeof(req->uuid))) {
-		if (info->rssi <= req->rssi)
-			return;
-	}
-
-	memcpy(req->uuid, data + 2, sizeof(req->uuid));
-	req->rssi = info->rssi;
-	rssi = info->rssi;
-
-	dbus = dbus_get_bus();
-	msg = l_dbus_message_new_method_call(dbus, node_get_owner(req->node),
-						node_get_app_path(req->node),
-						MESH_PROVISIONER_INTERFACE,
-						"ScanResult");
-
-	builder = l_dbus_message_builder_new(msg);
-	l_dbus_message_builder_append_basic(builder, 'n', &rssi);
-	dbus_append_byte_array(builder, data + 2, len -2);
-	l_dbus_message_builder_enter_array(builder, "{sv}");
-	/* TODO: populate with options when defined */
+	append_dict_entry_basic(builder, "Server", "q", &server);
 	l_dbus_message_builder_leave_array(builder);
 	l_dbus_message_builder_finalize(builder);
 	l_dbus_message_builder_destroy(builder);
@@ -535,6 +508,8 @@ static struct l_dbus_message *start_scan_call(struct l_dbus *dbus,
 	struct scan_req *req;
 	struct mesh_net *net;
 	uint8_t *uuid, *ext = NULL;
+	uint8_t scan_req[21];
+	int n;
 	uint32_t ext_len;
 	uint32_t flen = 0;
 	uint16_t sec = 60;
@@ -604,8 +579,11 @@ static struct l_dbus_message *start_scan_call(struct l_dbus *dbus,
 		if (!sec || sec > 60)
 			return dbus_error(msg, MESH_ERROR_INVALID_ARGS,
 							"Invalid options");
-	} else
+	} else {
 		new_req.server = node_get_primary(new_req.node);
+		if (!sec || sec > 60)
+			sec = 60;
+	}
 
 	req = l_queue_remove_if(scans, by_node_svr, &new_req);
 
@@ -623,26 +601,20 @@ static struct l_dbus_message *start_scan_call(struct l_dbus *dbus,
 	if (sec)
 		req->timeout = l_timeout_create(sec, scan_cancel, req, NULL);
 
-	if (new_req.server) {
-		uint8_t scan_req[21];
-		int n;
 
-		n = mesh_model_opcode_set(OP_REM_PROV_SCAN_START, scan_req);
-		scan_req[n++] = 5;
-		scan_req[n++] = sec;
-		if (flen) {
-			memcpy(scan_req + n, req->uuid, flen);
-			n += flen;
-		}
+	n = mesh_model_opcode_set(OP_REM_PROV_SCAN_START, scan_req);
+	scan_req[n++] = 5;
+	scan_req[n++] = sec;
+	if (flen) {
+		memcpy(scan_req + n, req->uuid, flen);
+		n += flen;
+	}
 
-		mesh_model_send(req->node, 0, req->server, APP_IDX_DEV_REMOTE,
+	mesh_model_send(req->node, 0, req->server, APP_IDX_DEV_REMOTE,
 						req->net_idx, DEFAULT_TTL,
 						true, n, scan_req);
 
-		initiator_scan_reg(manager_scan_result, req->node);
-	} else
-		mesh_io_register_recv_cb(NULL, prvb, sizeof(prvb),
-							prov_beacon_recv, req);
+	initiator_scan_reg(manager_scan_result, req->node);
 
 	l_queue_push_tail(scans, req);
 
