@@ -46,7 +46,7 @@ typedef void (*mesh_prov_open_func_t)(void *user_data, prov_trans_tx_t trans_tx,
 typedef void (*mesh_prov_close_func_t)(void *user_data, uint8_t reason);
 typedef void (*mesh_prov_send_func_t)(bool success, struct mesh_prov *prov);
 typedef void (*mesh_prov_ack_func_t)(void *user_data, uint8_t msg_num);
-typedef void (*mesh_prov_receive_func_t)(void *user_data, const uint8_t *data,
+typedef void (*mesh_prov_receive_func_t)(void *user_data, const void *data,
 								uint16_t size);
 
 

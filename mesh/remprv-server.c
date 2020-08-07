@@ -40,6 +40,11 @@
 
 #define EXT_LIST_SIZE	60
 
+#define RPR_DEV_KEY	0x00
+#define RPR_ADDR	0x01
+#define RPR_COMP	0x02
+#define RPR_ADV		0xFF	/* Internal use only*/
+
 struct rem_scan_data {
 	struct mesh_node *node;
 	struct l_timeout *timeout;
@@ -63,16 +68,26 @@ static struct rem_scan_data *rpb_scan;
 struct rem_prov_data {
 	struct mesh_node *node;
 	struct l_timeout *timeout;
-	prov_trans_tx_t trans_tx;
 	void *trans_data;
 	uint16_t client;
 	uint16_t net_idx;
-	uint8_t ib_pdu_cnt;
-	uint8_t ob_pdu_num;
+	uint8_t svr_pdu_num;
+	uint8_t cli_pdu_num;
 	uint8_t state;
-	uint8_t trans_type;
-	uint8_t size;
-	uint8_t param[17];
+	uint8_t nppi_proc;
+	union {
+		struct {
+			mesh_prov_open_func_t open_cb;
+			mesh_prov_close_func_t close_cb;
+			mesh_prov_receive_func_t rx_cb;
+			mesh_prov_ack_func_t ack_cb;
+			struct mesh_prov_node_info info;
+		} nppi;
+		struct {
+			uint8_t uuid[17];
+			prov_trans_tx_t tx;
+		} adv;
+	} u;
 };
 
 static struct rem_prov_data *rpb_prov;
@@ -83,8 +98,8 @@ static const char *name = "Test Name";
 
 static const uint8_t zero[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-static void srv_open(void *user_data, prov_trans_tx_t trans_tx,
-					void *trans_data, uint8_t trans_type)
+static void srv_open(void *user_data, prov_trans_tx_t adv_tx,
+					void *trans_data, uint8_t nppi_proc)
 {
 	struct rem_prov_data *prov = user_data;
 	uint8_t msg[5];
@@ -94,7 +109,7 @@ static void srv_open(void *user_data, prov_trans_tx_t trans_tx,
 		return;
 
 	l_debug("Remote Link open confirmed");
-	prov->trans_tx = trans_tx;
+	prov->u.adv.tx = adv_tx;
 	prov->trans_data = trans_data;
 	prov->state = PB_REMOTE_STATE_LINK_ACTIVE;
 
@@ -106,23 +121,24 @@ static void srv_open(void *user_data, prov_trans_tx_t trans_tx,
 				prov->net_idx, DEFAULT_TTL, true, n, msg);
 }
 
-static void srv_rx(void *user_data, const uint8_t *data, uint16_t size)
+static void srv_rx(void *user_data, const void *dptr, uint16_t len)
 {
 	struct rem_prov_data *prov = user_data;
+	const uint8_t *data = dptr;
 	uint8_t msg[69];
 	int n;
 
 	if (prov != rpb_prov || prov->state < PB_REMOTE_STATE_LINK_ACTIVE ||
-								size > 65)
+								len > 65)
 		return;
 
 	l_debug("Remote PB IB-PDU");
 
-	prov->ib_pdu_cnt++;
+	prov->svr_pdu_num++;
 	n = mesh_model_opcode_set(OP_REM_PROV_PDU_REPORT, msg);
-	msg[n++] = prov->ib_pdu_cnt;
-	memcpy(msg + n, data, size);
-	n += size;
+	msg[n++] = prov->svr_pdu_num;
+	memcpy(msg + n, data, len);
+	n += len;
 
 	mesh_model_send(prov->node, 0, prov->client, APP_IDX_DEV_LOCAL,
 				prov->net_idx, DEFAULT_TTL, true, n, msg);
@@ -141,7 +157,7 @@ static void srv_ack(void *user_data, uint8_t msg_num)
 
 	prov->state = PB_REMOTE_STATE_LINK_ACTIVE;
 	n = mesh_model_opcode_set(OP_REM_PROV_PDU_OB_REPORT, msg);
-	msg[n++] = prov->ob_pdu_num;
+	msg[n++] = prov->cli_pdu_num;
 
 	mesh_model_send(prov->node, 0, prov->client, APP_IDX_DEV_LOCAL,
 				prov->net_idx, DEFAULT_TTL, true, n, msg);
@@ -442,6 +458,73 @@ static bool register_ext_ad_type(uint8_t ad_type, struct rem_scan_data *scan)
 	return true;
 }
 
+static void link_active(void *user_data)
+{
+	struct rem_prov_data *prov = user_data;
+	uint8_t msg[5];
+	int n;
+
+	if (prov != rpb_prov || prov->state != PB_REMOTE_STATE_LINK_OPENING)
+		return;
+
+	l_debug("Remote Link open confirmed");
+	prov->state = PB_REMOTE_STATE_LINK_ACTIVE;
+
+	n = mesh_model_opcode_set(OP_REM_PROV_LINK_REPORT, msg);
+	msg[n++] = PB_REM_ERR_SUCCESS;
+	msg[n++] = PB_REMOTE_STATE_LINK_ACTIVE;
+
+	mesh_model_send(prov->node, 0, prov->client, APP_IDX_DEV_LOCAL,
+				prov->net_idx, DEFAULT_TTL, true, n, msg);
+}
+
+bool register_nppi_acceptor(mesh_prov_open_func_t open_cb,
+					mesh_prov_close_func_t close_cb,
+					mesh_prov_receive_func_t rx_cb,
+					mesh_prov_ack_func_t ack_cb,
+					void *user_data)
+{
+	struct rem_prov_data *prov = rpb_prov;
+
+	if (!prov || prov->nppi_proc == RPR_ADV)
+		return false;
+
+	prov->u.nppi.open_cb = open_cb;
+	prov->u.nppi.close_cb = close_cb;
+	prov->u.nppi.rx_cb = rx_cb;
+	prov->u.nppi.ack_cb = ack_cb;
+	prov->trans_data = user_data;
+
+	open_cb(user_data, srv_rx, prov, prov->nppi_proc);
+
+	l_idle_oneshot(link_active, prov, NULL);
+
+	return true;
+}
+
+static bool nppi_cmplt(void *user_data, uint8_t status,
+					struct mesh_prov_node_info *info)
+{
+	struct rem_prov_data *prov = user_data;
+
+	if (prov != rpb_prov)
+		return false;
+
+	/* Save new info to apply on Link Close */
+	prov->u.nppi.info = *info;
+	return true;
+}
+
+static bool start_dev_key_refresh(struct mesh_node *node, uint8_t nppi_proc,
+						struct rem_prov_data *prov)
+{
+	uint8_t num_ele = node_get_num_elements(node);
+
+	prov->nppi_proc = nppi_proc;
+	return acceptor_start(num_ele, NULL, 0x0001, 60, NULL, nppi_cmplt,
+									prov);
+}
+
 static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 					uint16_t net_idx, const uint8_t *data,
 					uint16_t size, const void *user_data)
@@ -452,7 +535,7 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 	const uint8_t *pkt = data;
 	bool segmented = false;
 	uint32_t opcode;
-	uint8_t msg[128];
+	uint8_t msg[69];
 	uint8_t status;
 	uint16_t n;
 
@@ -671,10 +754,10 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 		return true;
 
 	case OP_REM_PROV_LINK_OPEN:
+		/* Sanity check args */
 		if (size != 16 && size != 17 && size != 1)
 			return true;
 
-		/* Sanity check args */
 		if (size == 17 && (pkt[16] == 0 || pkt[16] > 0x3c))
 			return true;
 
@@ -682,18 +765,22 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 			return true;
 
 		if (prov) {
-			if (prov->client == src && prov->node == node &&
-							prov->size == size) {
-				if (!memcmp(prov->param, pkt, size)) {
-					/* Send redundant Status */
-					send_prov_status(prov,
-							PB_REM_ERR_SUCCESS);
-					return true;
-				}
+			if (prov->client != src || prov->node != node ||
+				(size == 1 && prov->nppi_proc != pkt[0]) ||
+				(size >= 16 && (prov->nppi_proc != RPR_ADV ||
+					memcmp(prov->u.adv.uuid, pkt, 16)))) {
+
+				/* Send Reject (in progress) */
+				send_prov_status(prov, PB_REM_ERR_CANNOT_OPEN);
+				n = mesh_model_opcode_set(
+						OP_REM_PROV_LINK_STATUS, msg);
+				msg[n++] = PB_REM_ERR_CANNOT_OPEN;
+				msg[n++] = PB_REMOTE_STATE_LINK_ACTIVE;
+				break;
 			}
 
-			/* Send Reject (in progress) */
-			send_prov_status(prov, PB_REM_ERR_CANNOT_OPEN);
+			/* Send redundant  Success */
+			send_prov_status(prov, PB_REM_ERR_SUCCESS);
 			return true;
 		}
 
@@ -713,22 +800,29 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 		prov->net_idx = net_idx;
 		prov->node = node;
 		prov->state = PB_REMOTE_STATE_LINK_OPENING;
-		prov->size = size;
-		memcpy(prov->param, pkt, size);
 
-		if (size == 17)
-			prov->timeout = l_timeout_create(pkt[16],
+		if (size == 1) {
+			status = start_dev_key_refresh(node, pkt[0], prov);
+
+		} else {
+			if (size == 17)
+				prov->timeout = l_timeout_create(pkt[16],
 						remprv_prov_cancel, prov, NULL);
 
-		if (pb_adv_reg(true, srv_open, srv_close, srv_rx, srv_ack,
-							prov->param, prov))
+
+			prov->nppi_proc = RPR_ADV;
+			memcpy(prov->u.adv.uuid, pkt, 16);
+			status = pb_adv_reg(true, srv_open, srv_close, srv_rx,
+							srv_ack, pkt, prov);
+		}
+
+		if (status)
 			send_prov_status(prov, PB_REM_ERR_SUCCESS);
 		else {
 			n = mesh_model_opcode_set(OP_REM_PROV_LINK_STATUS, msg);
 			msg[n++] = PB_REM_ERR_CANNOT_OPEN;
 			msg[n++] = PB_REMOTE_STATE_IDLE;
 			remprv_prov_cancel(NULL, prov);
-			break;
 		}
 
 		return true;
@@ -746,10 +840,21 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 		if (pkt[0] == 0x02) {
 			msg[0] = PROV_FAILED;
 			msg[1] = PROV_ERR_CANT_ASSIGN_ADDR;
-			prov->trans_tx(prov->trans_data, msg, 2);
+			if (prov->nppi_proc == RPR_ADV)
+				prov->u.adv.tx(prov->trans_data, msg, 2);
+			else
+				prov->u.nppi.rx_cb(prov->trans_data, msg, 2);
 		}
 
-		pb_adv_unreg(prov);
+		if (prov->nppi_proc == RPR_ADV)
+			pb_adv_unreg(prov);
+
+		else if (prov->nppi_proc <= RPR_COMP) {
+			/* Hard or Soft refresh of local node, based on NPPI */
+			node_refresh(prov->node, (prov->nppi_proc == RPR_ADDR),
+							&prov->u.nppi.info);
+		}
+
 		remprv_prov_cancel(NULL, prov);
 
 		return true;
@@ -761,10 +866,18 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 		if (size < 2)
 			return true;
 
-		prov->ob_pdu_num = *pkt++;
+
+		prov->cli_pdu_num = *pkt++;
 		size--;
 		prov->state = PB_REMOTE_STATE_OB_PKT_TX;
-		prov->trans_tx(prov->trans_data, pkt, size);
+
+		if (prov->nppi_proc == RPR_ADV)
+			prov->u.adv.tx(prov->trans_data, pkt, size);
+		else {
+			srv_ack(prov, prov->cli_pdu_num);
+			prov->u.nppi.rx_cb(prov->trans_data, pkt, size);
+		}
+
 		return true;
 	}
 

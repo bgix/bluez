@@ -69,10 +69,11 @@ struct mesh_agent;
 #define OOB_INFO_URI_HASH	0x0002
 
 /* PB_REMOTE not supported from unprovisioned state */
-enum trans_type {
-	PB_ADV = 0,
-	PB_GATT,
-};
+#define PB_NPPI_00	0x00
+#define PB_NPPI_01	0x01
+#define PB_NPPI_02	0x02
+#define PB_ADV		0x03 /* Internal only, and may be reassigned */
+#define PB_GATT		0x04 /* Internal only, and may be reassigned */
 
 #define PROV_FLAG_KR	0x01
 #define PROV_FLAG_IVU	0x02
@@ -112,7 +113,7 @@ bool acceptor_start(uint8_t num_ele, uint8_t uuid[16],
 			void *caller_data);
 void acceptor_cancel(void *user_data);
 
-bool initiator_start(enum trans_type transport,
+bool initiator_start(uint8_t transport,
 		uint16_t server,
 		uint16_t svr_idx,
 		uint8_t uuid[16],
