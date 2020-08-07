@@ -144,6 +144,40 @@ uint8_t remote_del_node(uint16_t unicast)
 	return num_ele;
 }
 
+bool remote_reset_node(uint16_t original, uint16_t unicast, uint8_t ele_cnt,
+							uint32_t iv_index)
+{
+	struct remote_node *rmt;
+	bool blacklist = true;
+	int i;
+
+	rmt = l_queue_remove_if(nodes, match_node_addr,
+						L_UINT_TO_PTR(original));
+	if (!rmt)
+		return false;
+
+	if (unicast == rmt->unicast)
+		blacklist = false;
+
+	for (i = 0; i < rmt->num_ele; ++i) {
+		l_queue_destroy(rmt->els[i], NULL);
+		if (blacklist)
+			remote_add_blacklisted_address(rmt->unicast + i,
+								iv_index, true);
+	}
+
+	if (ele_cnt != rmt->num_ele) {
+		l_free(rmt->els);
+		rmt->els = l_new(struct l_queue *, ele_cnt);
+	} else
+		memset(rmt->els, 0, sizeof(struct l_queue *) * ele_cnt);
+
+	rmt->unicast = unicast;
+	rmt->num_ele = ele_cnt;
+	l_queue_insert(nodes, rmt, compare_unicast, NULL);
+	return true;
+}
+
 bool remote_add_node(const uint8_t uuid[16], uint16_t unicast,
 					uint8_t ele_cnt, uint16_t net_idx)
 {
@@ -668,4 +702,16 @@ void remote_clear_blacklisted_addresses(uint32_t iv_index)
 	}
 
 	mesh_db_clear_blacklisted(iv_index);
+}
+
+uint8_t remote_ele_cnt(uint16_t unicast)
+{
+	struct remote_node *rmt;
+
+	rmt = l_queue_find(nodes, match_node_addr, L_UINT_TO_PTR(unicast));
+
+	if (rmt)
+		return rmt->num_ele;
+
+	return 0;
 }
