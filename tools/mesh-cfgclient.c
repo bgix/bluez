@@ -1583,6 +1583,37 @@ static void add_node_reply(struct l_dbus_proxy *proxy,
 	bt_shell_printf("Provisioning started\n");
 }
 
+static void reprov_reply(struct l_dbus_proxy *proxy,
+				struct l_dbus_message *msg, void *user_data)
+{
+	if (l_dbus_message_is_error(msg)) {
+		const char *name;
+
+		prov_in_progress = false;
+		l_dbus_message_get_error(msg, &name, NULL);
+		l_error("Failed to start provisioning: %s", name);
+		return;
+	}
+
+	bt_shell_printf("Reprovisioning started\n");
+}
+
+static void reprovision_setup(struct l_dbus_message *msg, void *user_data)
+{
+	uint16_t target = L_PTR_TO_UINT(user_data);
+	uint8_t nppi = L_PTR_TO_UINT(user_data) >> 16;
+	struct l_dbus_message_builder *builder;
+
+	builder = l_dbus_message_builder_new(msg);
+	l_dbus_message_builder_append_basic(builder, 'q', &target);
+	l_dbus_message_builder_enter_array(builder, "{sv}");
+	/* TODO: populate with options when defined */
+	append_dict_entry_basic(builder, "NPPI", "y", &nppi);
+	l_dbus_message_builder_leave_array(builder);
+	l_dbus_message_builder_finalize(builder);
+	l_dbus_message_builder_destroy(builder);
+}
+
 static void add_node_setup(struct l_dbus_message *msg, void *user_data)
 {
 	struct unprov_device *dev = user_data;
@@ -1656,6 +1687,55 @@ static void cmd_start_prov(int argc, char *argv[])
 		prov_in_progress = true;
 }
 
+static void cmd_start_reprov(int argc, char *argv[])
+{
+	uint16_t target = 0;
+	uint8_t nppi = 0;
+
+	if (!local || !local->proxy || !local->mgmt_proxy) {
+		bt_shell_printf("Node is not attached\n");
+		return;
+	}
+
+	if (prov_in_progress) {
+		bt_shell_printf("Provisioning is already in progress\n");
+		return;
+	}
+
+	if (!argv[1]) {
+		bt_shell_printf(COLOR_RED "Requires Unicast\n" COLOR_RED);
+		return;
+	}
+
+	if (argv[2]) {
+		char *end;
+
+		nppi = strtol(argv[2], &end, 16);
+	}
+
+	if (strlen(argv[1]) == 4) {
+		char *end;
+
+		target = strtol(argv[1], &end, 16);
+
+		if (end != (argv[1] + 4)) {
+			bt_shell_printf(COLOR_RED "Invalid Unicast\n"
+								COLOR_RED);
+			return;
+		}
+
+	} else {
+		bt_shell_printf(COLOR_RED "Requires Unicast\n" COLOR_RED);
+		return;
+	}
+
+	if (l_dbus_proxy_method_call(local->mgmt_proxy, "Reprovision",
+					reprovision_setup, reprov_reply,
+					L_UINT_TO_PTR(target + (nppi << 16)),
+					NULL))
+		prov_in_progress = true;
+}
+
 static const struct bt_shell_menu main_menu = {
 	.name = "main",
 	.entries = {
@@ -1685,6 +1765,8 @@ static const struct bt_shell_menu main_menu = {
 			"List unprovisioned devices" },
 	{ "provision", "<uuid>", cmd_start_prov,
 			"Initiate provisioning"},
+	{ "reprovision", "<unicast> [0|1|2]", cmd_start_reprov,
+			"Refresh Device Key"},
 	{ "node-import", "<uuid> <net_idx> <primary> <ele_count> <dev_key>",
 			cmd_import_node,
 			"Import an externally provisioned remote node"},
@@ -1885,7 +1967,6 @@ static struct l_dbus_message *scan_result_call(struct l_dbus *dbus,
 	uint16_t server = 0;
 	uint32_t n;
 	uint8_t *prov_data;
-	//char *str;
 	const char *key;
 	const char *sig = "naya{sv}";
 
@@ -1943,6 +2024,33 @@ done:
 	return l_dbus_message_new_method_return(msg);
 }
 
+static struct l_dbus_message *req_reprov_call(struct l_dbus *dbus,
+						struct l_dbus_message *msg,
+						void *user_data)
+{
+	uint8_t cnt;
+	uint16_t unicast, original;
+	struct l_dbus_message *reply;
+
+
+	if (!l_dbus_message_get_arguments(msg, "qy", &original, &cnt) ||
+							!IS_UNICAST(original)) {
+		l_error("Cannot parse request for reprov data");
+		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
+
+	}
+
+	unicast = remote_get_next_unicast(low_addr, high_addr, cnt);
+
+	bt_shell_printf("Assign addresses for %u elements\n", cnt);
+	bt_shell_printf("Original: %4.4x New: %4.4x\n", original, unicast);
+
+	reply = l_dbus_message_new_method_return(msg);
+	l_dbus_message_set_arguments(reply, "q", unicast);
+
+	return reply;
+}
+
 static struct l_dbus_message *req_prov_call(struct l_dbus *dbus,
 						struct l_dbus_message *msg,
 						void *user_data)
@@ -1951,6 +2059,7 @@ static struct l_dbus_message *req_prov_call(struct l_dbus *dbus,
 	uint16_t unicast;
 	struct l_dbus_message *reply;
 
+	/* Both calls handled identicaly except for parameter list */
 	if (!l_dbus_message_get_arguments(msg, "y", &cnt)) {
 		l_error("Cannot parse request for prov data");
 		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
@@ -1959,14 +2068,14 @@ static struct l_dbus_message *req_prov_call(struct l_dbus *dbus,
 
 	unicast = remote_get_next_unicast(low_addr, high_addr, cnt);
 
-	if (unicast == 0) {
+	if (!IS_UNICAST(unicast)) {
 		l_error("Failed to allocate addresses for %u elements\n", cnt);
 		return l_dbus_message_new_error(msg,
 					"org.freedesktop.DBus.Error."
 					"Failed to allocate address", NULL);
 	}
 
-	bt_shell_printf("Assign addresses for %u elements\n", cnt);
+	bt_shell_printf("Assign addresses: %4.4x (cnt: %d)\n", unicast, cnt);
 
 	reply = l_dbus_message_new_method_return(msg);
 	l_dbus_message_set_arguments(reply, "qq", prov_net_idx, unicast);
@@ -1984,7 +2093,7 @@ static void remove_device(uint8_t *uuid)
 	} while (dev);
 }
 
-static struct l_dbus_message *add_node_cmplt_call(struct l_dbus *dbus,
+static struct l_dbus_message *prov_cmplt_call(struct l_dbus *dbus,
 						struct l_dbus_message *msg,
 						void *user_data)
 {
@@ -1994,6 +2103,7 @@ static struct l_dbus_message *add_node_cmplt_call(struct l_dbus *dbus,
 	uint32_t n;
 	uint8_t *uuid;
 
+	l_debug("ProvComplete");
 	if (!prov_in_progress)
 		return l_dbus_message_new_error(msg, dbus_err_fail, NULL);
 
@@ -2024,7 +2134,49 @@ static struct l_dbus_message *add_node_cmplt_call(struct l_dbus *dbus,
 	return l_dbus_message_new_method_return(msg);
 }
 
-static struct l_dbus_message *add_node_fail_call(struct l_dbus *dbus,
+static struct l_dbus_message *reprov_cmplt_call(struct l_dbus *dbus,
+						struct l_dbus_message *msg,
+						void *user_data)
+{
+	uint16_t unicast, original;
+	uint8_t old_cnt, cnt, nppi;
+
+	l_debug("ReprovComplete");
+	if (!prov_in_progress)
+		return l_dbus_message_new_error(msg, dbus_err_fail, NULL);
+
+	prov_in_progress = false;
+
+	if (!l_dbus_message_get_arguments(msg, "qyqy", &original, &nppi,
+							&unicast, &cnt)) {
+		l_error("Cannot parse reprov complete message");
+		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
+
+	}
+
+	l_debug("ReprovComplete org: %4.4x, nppi: %d, new: %4.4x, cnt: %d",
+						original, nppi, unicast, cnt);
+	old_cnt = remote_ele_cnt(original);
+
+	if (nppi != 1 && (original != unicast || cnt != old_cnt)) {
+		l_error("Invalid reprov complete message (NPPI == %d)", nppi);
+		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
+	}
+
+	if (nppi)
+		remote_reset_node(original, unicast, cnt,
+						mesh_db_get_iv_index());
+
+	bt_shell_printf("Reprovisioning done (nppi: %d):\n", nppi);
+	remote_print_node(unicast);
+
+	if (!mesh_db_reset_node(original, unicast, cnt))
+		l_error("Failed to reset remote node");
+
+	return l_dbus_message_new_method_return(msg);
+}
+
+static struct l_dbus_message *prov_fail_call(struct l_dbus *dbus,
 						struct l_dbus_message *msg,
 						void *user_data)
 {
@@ -2039,24 +2191,49 @@ static struct l_dbus_message *add_node_fail_call(struct l_dbus *dbus,
 	prov_in_progress = false;
 
 	if (!l_dbus_message_get_arguments(msg, "ays", &iter, &reason)) {
-		l_error("Cannot parse add node failed message");
+		l_error("Cannot parse failed message");
 		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
-
 	}
 
-	if (!l_dbus_message_iter_get_fixed_array(&iter, &uuid, &n) ||
-								n != 16) {
-		l_error("Cannot parse add node failed message: uuid");
+	if (!l_dbus_message_iter_get_fixed_array(&iter, &uuid, &n) || n != 16) {
+		l_error("Cannot parse failed message: uuid");
 		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
 	}
 
 	bt_shell_printf("Provisioning failed:\n");
+
 	str = l_util_hexstring_upper(uuid, 16);
 	bt_shell_printf("\t" COLOR_RED "UUID = %s\n" COLOR_OFF, str);
 	l_free(str);
+	remove_device(uuid);
 	bt_shell_printf("\t" COLOR_RED "%s\n" COLOR_OFF, reason);
 
-	remove_device(uuid);
+	return l_dbus_message_new_method_return(msg);
+}
+
+static struct l_dbus_message *reprov_fail_call(struct l_dbus *dbus,
+						struct l_dbus_message *msg,
+						void *user_data)
+{
+	struct l_dbus_message_iter iter;
+	uint16_t original = UNASSIGNED_ADDRESS;
+	char *reason;
+
+	if (!prov_in_progress)
+		return l_dbus_message_new_error(msg, dbus_err_fail, NULL);
+
+	prov_in_progress = false;
+
+	if (!l_dbus_message_get_arguments(msg, "qs", &iter, &reason) ||
+							!IS_UNICAST(original)) {
+
+		l_error("Cannot parse Reprov failed message");
+		return l_dbus_message_new_error(msg, dbus_err_args, NULL);
+	}
+
+	bt_shell_printf("Reprovisioning failed:\n");
+	bt_shell_printf("\t" COLOR_RED "UNICAST = %4.4x\n" COLOR_OFF, original);
+	bt_shell_printf("\t" COLOR_RED "%s\n" COLOR_OFF, reason);
 
 	return l_dbus_message_new_method_return(msg);
 }
@@ -2069,12 +2246,23 @@ static void setup_prov_iface(struct l_dbus_interface *iface)
 	l_dbus_interface_method(iface, "RequestProvData", 0, req_prov_call,
 				"qq", "y", "net_index", "unicast", "count");
 
+	l_dbus_interface_method(iface, "RequestReprovData", 0, req_reprov_call,
+					"q", "qy", "unicast",
+					"original", "count");
+
 	l_dbus_interface_method(iface, "AddNodeComplete", 0,
-					add_node_cmplt_call, "", "ayqy",
+					prov_cmplt_call, "", "ayqy",
 					"uuid", "unicast", "count");
 
-	l_dbus_interface_method(iface, "AddNodeFailed", 0, add_node_fail_call,
+	l_dbus_interface_method(iface, "ReprovComplete", 0,
+					reprov_cmplt_call, "", "qyqy",
+					"original", "nppi", "unicast", "count");
+
+	l_dbus_interface_method(iface, "AddNodeFailed", 0, prov_fail_call,
 					"", "ays", "uuid", "reason");
+
+	l_dbus_interface_method(iface, "ReprovFailed", 0, reprov_fail_call,
+					"", "qs", "unicast", "reason");
 }
 
 static bool cid_getter(struct l_dbus *dbus,
