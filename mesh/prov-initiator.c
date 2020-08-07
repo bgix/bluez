@@ -84,12 +84,11 @@ struct mesh_prov_initiator {
 	struct l_timeout *timeout;
 	uint32_t to_secs;
 	enum int_state	state;
-	enum trans_type transport;
 	uint16_t net_idx;
 	uint16_t svr_idx;
 	uint16_t unicast;
 	uint16_t server;
-	bool comp_refresh;
+	uint8_t transport;
 	uint8_t material;
 	uint8_t expected;
 	int8_t previous;
@@ -647,9 +646,10 @@ static void int_prov_start_auth(const struct mesh_agent_prov_caps *prov_caps,
 	}
 }
 
-static void int_prov_rx(void *user_data, const uint8_t *data, uint16_t len)
+static void int_prov_rx(void *user_data, const void *dptr, uint16_t len)
 {
 	struct mesh_prov_initiator *rx_prov = user_data;
+	const uint8_t *data = dptr;
 	uint8_t *out;
 	uint8_t type = *data++;
 	uint8_t fail_code[2];
@@ -794,7 +794,12 @@ static void int_prov_rx(void *user_data, const uint8_t *data, uint16_t len)
 			goto failure;
 		}
 
-		if (!prov->data_req_cb(prov->caller_data,
+		if (prov->transport == PB_NPPI_00 ||
+						prov->transport == PB_NPPI_02) {
+			/* No App data needed */
+			initiator_prov_data(prov->svr_idx, prov->server,
+							prov->caller_data);
+		} else if (!prov->data_req_cb(prov->caller_data,
 					prov->conf_inputs.caps.num_ele)) {
 			l_error("Provisioning Failed-Data Get");
 			fail_code[1] = PROV_ERR_CANT_ASSIGN_ADDR;
@@ -885,7 +890,9 @@ static void initiator_open_cb(void *user_data, int err)
 	if (prov->server) {
 		n = mesh_model_opcode_set(OP_REM_PROV_LINK_OPEN, msg);
 
-		if (!prov->comp_refresh) {
+		if (prov->transport <= PB_NPPI_02) {
+			msg[n++] = prov->transport;
+		} else {
 			memcpy(msg + n, prov->uuid, 16);
 			n += 16;
 		}
@@ -923,12 +930,8 @@ static void initiate_to(struct l_timeout *timeout, void *user_data)
 	int_prov_close(user_data, PROV_ERR_TIMEOUT);
 }
 
-bool initiator_start(enum trans_type transport,
-		uint16_t server,
-		uint16_t svr_idx,
-		uint8_t *uuid,
-		uint16_t max_ele,
-		uint32_t timeout, /* in seconds from mesh.conf */
+bool initiator_start(uint8_t transport, uint16_t server, uint16_t svr_idx,
+		uint8_t *uuid, uint16_t max_ele, uint32_t timeout,
 		struct mesh_agent *agent,
 		mesh_prov_initiator_start_func_t start_cb,
 		mesh_prov_initiator_data_req_func_t data_req_cb,
@@ -953,12 +956,11 @@ bool initiator_start(enum trans_type transport,
 	prov->previous = -1;
 	prov->server = server;
 	prov->svr_idx = svr_idx;
+	prov->transport = transport;
 	prov->timeout = l_timeout_create(timeout, initiate_to, prov, NULL);
 
 	if (uuid)
 		memcpy(prov->uuid, uuid, 16);
-	else
-		prov->comp_refresh = true;
 
 	mesh_agent_refresh(prov->agent, initiator_open_cb, prov);
 

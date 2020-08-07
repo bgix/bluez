@@ -71,3 +71,8 @@
 
 void remote_prov_server_init(struct mesh_node *node, uint8_t ele_idx);
 void remote_prov_client_init(struct mesh_node *node, uint8_t ele_idx);
+bool register_nppi_acceptor(mesh_prov_open_func_t open_cb,
+					mesh_prov_close_func_t close_cb,
+					mesh_prov_receive_func_t rx_cb,
+					mesh_prov_ack_func_t ack_cb,
+					void *user_data);
