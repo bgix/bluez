@@ -9,3 +9,4 @@
  */
 
 extern const struct mesh_io_api mesh_io_generic;
+extern const struct mesh_io_api mesh_io_mgmt;

@@ -123,6 +123,12 @@ static void disconnect_callback(void *user_data)
 	l_main_quit();
 }
 
+static void kill_to(struct l_timeout *timeout, void *user_data)
+{
+	l_timeout_remove(timeout);
+	l_main_quit();
+}
+
 static void signal_handler(uint32_t signo, void *user_data)
 {
 	static bool terminated;
@@ -131,7 +137,8 @@ static void signal_handler(uint32_t signo, void *user_data)
 		return;
 
 	l_info("Terminating");
-	l_main_quit();
+	mesh_cleanup(true);
+	l_timeout_create(1, kill_to, NULL, NULL);
 	terminated = true;
 }
 
@@ -295,7 +302,7 @@ done:
 	l_free(io);
 	l_free(io_opts);
 
-	mesh_cleanup();
+	mesh_cleanup(false);
 	l_dbus_destroy(dbus);
 	l_main_exit();
 
