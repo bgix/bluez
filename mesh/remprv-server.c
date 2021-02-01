@@ -831,8 +831,12 @@ static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,
 		if (size != 1)
 			return true;
 
-		if (!prov || prov->node != node || prov->client != src)
-			return true;
+		if (!prov || prov->node != node || prov->client != src) {
+			n = mesh_model_opcode_set(OP_REM_PROV_LINK_STATUS, msg);
+			msg[n++] = PB_REM_ERR_INVALID_STATE;
+			msg[n++] = PB_REMOTE_STATE_IDLE;
+			goto send_pkt;
+		}
 
 		prov->state = PB_REMOTE_STATE_LINK_CLOSING;
 		mesh_io_send_cancel(NULL, &pkt_filter, sizeof(pkt_filter));
