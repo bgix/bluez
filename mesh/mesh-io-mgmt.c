@@ -123,6 +123,7 @@ static void process_rx(struct mesh_io_private *pvt, int8_t rssi,
 		.info.rssi = rssi,
 	};
 
+	//print_packet("RX", data, len);
 	l_queue_foreach(pvt->rx_regs, process_rx_callbacks, &rx);
 }
 
@@ -137,8 +138,6 @@ static void event_device_found(uint16_t index, uint16_t length,
 	uint16_t adv_len;
 	uint16_t len = 0;
 
-	l_debug("Yeah Baby %d %d", index, ev->addr.type);
-
 	if (ev->addr.type < 1 || ev->addr.type > 2)
 		return;
 
@@ -146,8 +145,7 @@ static void event_device_found(uint16_t index, uint16_t length,
 	adv = ev->eir;
 	adv_len = ev->eir_len;
 	addr = ev->addr.bdaddr.b;
-	print_packet("addr", addr, 6);
-	print_packet("data", adv, adv_len);
+	//print_packet("data", adv, adv_len);
 
 	while (len < adv_len - 1) {
 		uint8_t field_len = adv[0];
@@ -598,14 +596,15 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		if (0)
 			hci_init(index);
 		else {
-			unsigned char param[] = { 0x01 };
+			unsigned char power[] = { 0x01 };
+			unsigned char le[] = { 0x02 };
 
 			mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
-						sizeof(param), &param,
+						sizeof(le), &le,
 					le_up, L_UINT_TO_PTR(index), NULL);
 
 			mgmt_send(pvt->mgmt, MGMT_OP_SET_POWERED, index,
-					sizeof(param), &param,
+					sizeof(power), &power,
 					ctl_up, L_UINT_TO_PTR(index), NULL);
 		}
 	} else
@@ -825,8 +824,14 @@ static void send_cancel(struct mesh_io_private *pvt)
 		return;
 
 	if (pvt->instance) {
+		char adv_off[] = { 0 };
+		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, pvt->send_idx,
+				sizeof(adv_off), adv_off,
+				NULL, NULL, NULL);
+
 		remove.instance = pvt->instance;
 		//if (0)
+		l_debug("Cancel TX");
 		mgmt_send(pvt->mgmt, MGMT_OP_REMOVE_ADVERTISING, pvt->send_idx,
 						sizeof(remove), &remove,
 						NULL, NULL, NULL);
@@ -933,6 +938,13 @@ static void add_adv_cb(uint8_t status, uint16_t length,
 	print_packet("Add_Adv params", param, length);
 }
 
+static void adv_halt(uint8_t status, uint16_t length,
+					const void *param, void *user_data)
+{
+	l_debug("Adv Halt Status: %d", status);
+	print_packet("Halt params", param, length);
+}
+
 static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 							uint16_t interval)
 {
@@ -951,10 +963,10 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 	index = pvt->send_idx;
 
 	if (instance) {
-		//char adv_off[] = { 0 };
-	//mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
-				//sizeof(adv_off), adv_off,
-				//adv_set, L_UINT_TO_PTR(index), NULL);
+		char adv_off[] = { 0 };
+		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
+				sizeof(adv_off), adv_off,
+				adv_halt, L_UINT_TO_PTR(index), NULL);
 
 		remove.instance = instance;
 		//if (0)
@@ -968,7 +980,8 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 		mgmt_send(pvt->mgmt, MGMT_OP_SET_STATIC_ADDRESS, index,
 				sizeof(set_addr), &set_addr, NULL, NULL, NULL);
 #endif
-	}
+	} else
+		l_debug("Adv-Idle");
 
 	next_instance(pvt);
 
