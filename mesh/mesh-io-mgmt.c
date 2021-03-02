@@ -123,7 +123,6 @@ static void process_rx(struct mesh_io_private *pvt, int8_t rssi,
 		.info.rssi = rssi,
 	};
 
-	//print_packet("RX", data, len);
 	l_queue_foreach(pvt->rx_regs, process_rx_callbacks, &rx);
 }
 
@@ -145,7 +144,6 @@ static void event_device_found(uint16_t index, uint16_t length,
 	adv = ev->eir;
 	adv_len = ev->eir_len;
 	addr = ev->addr.bdaddr.b;
-	//print_packet("data", adv, adv_len);
 
 	while (len < adv_len - 1) {
 		uint8_t field_len = adv[0];
@@ -934,8 +932,8 @@ struct mgmt_cp_set_static_address {
 static void add_adv_cb(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
-	l_debug("Add_Adv Status: %d", status);
-	print_packet("Add_Adv params", param, length);
+	//l_debug("Add_Adv Status: %d", status);
+	//print_packet("Add_Adv params", param, length);
 }
 
 static void adv_halt(uint8_t status, uint16_t length,
@@ -1003,8 +1001,6 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 	add->adv_data_len = tx->len + 1;
 	add->data[0] = tx->len;
 	memcpy(add->data + 1, tx->pkt, tx->len);
-	l_debug("Add Adv for hci%d (instance %d)", index, add->instance);
-	print_packet("Trying", add, len);
 	mgmt_send(pvt->mgmt, MGMT_OP_ADD_ADVERTISING, index, len, add,
 							add_adv_cb, NULL, NULL);
 	l_free(add);
@@ -1017,7 +1013,6 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
 		l_free(tx);
 	}
-
 }
 
 static void tx_to(struct l_timeout *timeout, void *user_data)
@@ -1027,14 +1022,11 @@ static void tx_to(struct l_timeout *timeout, void *user_data)
 	uint16_t ms;
 	uint8_t count;
 
-	l_debug("TX Timeout %p", pvt);
-
 	if (!pvt)
 		return;
 
 	tx = l_queue_pop_head(pvt->tx_pkts);
 	if (!tx) {
-		l_debug("Empty Queue");
 		l_timeout_remove(timeout);
 		pvt->tx_timeout = NULL;
 		send_cancel(pvt);
