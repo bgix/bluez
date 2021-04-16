@@ -30,6 +30,7 @@
 #include "mesh/keyring.h"
 #include "mesh/model.h"
 #include "mesh/cfgmod.h"
+#include "mesh/opcode-aggr.h"
 #include "mesh/util.h"
 #include "mesh/error.h"
 #include "mesh/dbus.h"
@@ -1071,6 +1072,10 @@ static bool get_sig_models_from_properties(struct mesh_node *node,
 		if (ele->idx != PRIMARY_ELE_IDX && id == CONFIG_SRV_MODEL)
 			return false;
 
+		/* Allow Aggr Server Model only on the primary element */
+		if (ele->idx != PRIMARY_ELE_IDX && id == OPCODE_AGGR_SRV_MODEL)
+			return false;
+
 		if (!mesh_model_add(node, ele->models, id, &var))
 			return false;
 	}
@@ -1170,8 +1175,10 @@ static bool get_element_properties(struct mesh_node *node, const char *path,
 	 * daemon. If the model is present in the application properties,
 	 * the operation below will be a "no-op".
 	 */
-	if (ele->idx == PRIMARY_ELE_IDX)
+	if (ele->idx == PRIMARY_ELE_IDX) {
 		mesh_model_add(node, ele->models, CONFIG_SRV_MODEL, NULL);
+		mesh_model_add(node, ele->models, OPCODE_AGGR_SRV_MODEL, NULL);
+	}
 
 	return true;
 fail:

@@ -21,9 +21,11 @@
 #include "mesh/crypto.h"
 #include "mesh/node.h"
 #include "mesh/mesh-config.h"
+#include "mesh/ob-msg.h"
 #include "mesh/net.h"
 #include "mesh/appkey.h"
 #include "mesh/cfgmod.h"
+#include "mesh/opcode-aggr.h"
 #include "mesh/error.h"
 #include "mesh/dbus.h"
 #include "mesh/util.h"
@@ -74,6 +76,9 @@ static struct l_queue *mesh_virtuals;
 static bool is_internal(uint32_t id)
 {
 	if (id == CONFIG_SRV_MODEL || id == CONFIG_CLI_MODEL)
+		return true;
+
+	if (id == OPCODE_AGGR_SRV_MODEL || id == OPCODE_AGGR_CLI_MODEL)
 		return true;
 
 	return false;
@@ -378,8 +383,9 @@ static void forward_model(void *a, void *b)
 
 	if (mod->cbs->recv)
 		result = mod->cbs->recv(fwd->src, dst, fwd->app_idx,
-				fwd->net_idx,
-				fwd->data, fwd->size, mod->user_data);
+						fwd->net_idx,
+						fwd->data, fwd->size,
+						mod->user_data);
 
 	if (dst == fwd->unicast && result)
 		fwd->done = true;
@@ -630,6 +636,9 @@ static int update_binding(struct mesh_node *node, uint16_t addr, uint32_t id,
 	if (id == CONFIG_SRV_MODEL || id == CONFIG_CLI_MODEL)
 		return MESH_STATUS_INVALID_MODEL;
 
+	if (id == OPCODE_AGGR_SRV_MODEL || id == OPCODE_AGGR_CLI_MODEL)
+		return MESH_STATUS_INVALID_MODEL;
+
 	if (!appkey_have_key(node_get_net(node), app_idx))
 		return MESH_STATUS_INVALID_APPKEY;
 
@@ -848,6 +857,55 @@ static void send_msg_rcvd(struct mesh_node *node, uint8_t ele_idx,
 	l_dbus_message_builder_finalize(builder);
 	l_dbus_message_builder_destroy(builder);
 	l_dbus_send(dbus, msg);
+}
+
+void mesh_model_clear_rx(struct mesh_node *node, uint16_t src, uint16_t dst,
+					uint16_t net_idx, uint16_t app_idx,
+					const uint8_t *data, uint16_t size)
+{
+	struct l_queue *models;
+	uint16_t addr = node_get_primary(node);
+	uint8_t i;
+	struct mod_forward forward = {
+		.src = src,
+		.dst = dst,
+		.data = data,
+		.size = size,
+		.app_idx = app_idx,
+		.net_idx = net_idx,
+		.done = false,
+	};
+
+	i = node_get_num_elements(node);
+
+	if (dst < addr || dst > addr + i)
+		return;
+
+	models = node_get_element_models(node, i);
+
+	/* Forward to internal models */
+	l_queue_foreach(models, forward_model, &forward);
+
+	/* Forward to external models */
+	if (!forward.done) {
+		uint8_t *msg;
+		uint16_t n;
+
+		i = dst - addr;
+		if ((app_idx & APP_IDX_MASK) == app_idx) {
+			send_msg_rcvd(node, i, src, dst, NULL, app_idx,
+								size, data);
+		} else if (app_idx == APP_IDX_DEV_REMOTE ||
+						app_idx == APP_IDX_DEV_LOCAL) {
+			send_dev_key_msg_rcvd(node, i, src, app_idx, net_idx,
+								size, data);
+		}
+
+		/* We don't aggregate responses for external models */
+		/* Add empty entry */
+		msg = mesh_ob_buf(&n);
+		mesh_ob_finalize(msg, 1);
+	}
 }
 
 bool mesh_model_rx(struct mesh_node *node, bool szmict, uint32_t seq0,
@@ -1746,28 +1804,6 @@ void mesh_model_convert_to_storage(struct l_queue *db_mods,
 		db_mod->sub_enabled = mod->sub_enabled;
 		l_queue_push_tail(db_mods, db_mod);
 	}
-}
-
-uint16_t mesh_model_opcode_set(uint32_t opcode, uint8_t *buf)
-{
-	if (opcode <= 0x7e) {
-		buf[0] = opcode;
-		return 1;
-	}
-
-	if (opcode >= 0x8000 && opcode <= 0xbfff) {
-		l_put_be16(opcode, buf);
-		return 2;
-	}
-
-	if (opcode >= 0xc00000 && opcode <= 0xffffff) {
-		buf[0] = (opcode >> 16) & 0xff;
-		l_put_be16(opcode, buf + 1);
-		return 3;
-	}
-
-	l_debug("Illegal Opcode %x", opcode);
-	return 0;
 }
 
 bool mesh_model_opcode_get(const uint8_t *buf, uint16_t size,
