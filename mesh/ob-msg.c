@@ -71,7 +71,7 @@ uint16_t mesh_ob_finalize(uint8_t *buf, uint16_t len)
 	}
 
 	if (len <= 0x80) {
-		*buf = (uint8_t) (len - 1);
+		*buf = (uint8_t) ((len - 1) << 1);
 		cur_end += len;
 		return len;
 	} else if (len <= 0x8000) {
@@ -84,7 +84,7 @@ uint16_t mesh_ob_finalize(uint8_t *buf, uint16_t len)
 			return 0;
 
 		memmove(buf, buf + 1, len);
-		l_put_le16((len - 1) | 0x8000, buf);
+		l_put_le16(((len - 1) << 1) | 0x0001, buf);
 		cur_end += len + 1;
 		return len + 1;
 	} else

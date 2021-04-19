@@ -38,9 +38,6 @@ static bool opcode_aggr_srv_pkt(uint16_t src, uint16_t dst, uint16_t app_idx,
 	ssize_t pkt_size = size;
 
 
-	if (app_idx != APP_IDX_DEV_LOCAL)
-		return false;
-
 	if (mesh_model_opcode_get(pkt, size, &opcode, &n)) {
 		pkt_size -= n;
 		pkt += n;
@@ -83,12 +80,12 @@ static bool opcode_aggr_srv_pkt(uint16_t src, uint16_t dst, uint16_t app_idx,
 		mesh_ob_finalize(msg, n);
 
 		while (pkt_size >= 2 && n < MAX_MSG_LEN) {
-			if (pkt[0] & 0x80) {
-				item_len = l_get_le16(pkt) & 0x7fff;
+			if (pkt[0] & 0x01) {
+				item_len = l_get_le16(pkt) >> 1;
 				pkt += 2;
 				pkt_size -= 2;
 			} else {
-				item_len = pkt[0];
+				item_len = pkt[0] >> 1;
 				pkt++;
 				pkt_size--;
 			}
