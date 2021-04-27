@@ -113,7 +113,7 @@ struct mesh_net_prov_caps {
 	uint8_t num_ele;
 	uint16_t algorithms;
 	uint8_t pub_type;
-	uint8_t static_type;
+	uint8_t oob_type;
 	uint8_t output_size;
 	uint16_t output_action;
 	uint8_t input_size;

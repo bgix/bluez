@@ -613,7 +613,7 @@ static void int_prov_start_auth(const struct mesh_agent_prov_caps *prov_caps,
 				struct prov_start *start)
 {
 	uint8_t pub_type = prov_caps->pub_type & dev_caps->pub_type;
-	uint8_t static_type = prov_caps->static_type & dev_caps->static_type;
+	uint8_t oob_type = prov_caps->oob_type & dev_caps->oob_type;
 	uint16_t output_action = prov_caps->output_action &
 					L_BE16_TO_CPU(dev_caps->output_action);
 	uint8_t output_size = MIN(prov_caps->output_size,
@@ -626,7 +626,7 @@ static void int_prov_start_auth(const struct mesh_agent_prov_caps *prov_caps,
 		start->pub_key = 0x01;
 
 	/* Parse OOB Options, prefer static, then out, then in */
-	if (static_type) {
+	if (oob_type) {
 		start->auth_method = 0x01;
 		return;
 	}
@@ -686,7 +686,7 @@ static void int_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		l_debug("Got Num Ele %d", data[0]);
 		l_debug("Got alg %4.4x", l_get_be16(data + 1));
 		l_debug("Got pub_type %d", data[3]);
-		l_debug("Got static_type %d", data[4]);
+		l_debug("Got oob_type %d", data[4]);
 		l_debug("Got output_size %d", data[5]);
 		l_debug("Got output_action %d", l_get_be16(data + 6));
 		l_debug("Got input_size %d", data[8]);

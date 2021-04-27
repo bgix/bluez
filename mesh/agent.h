@@ -16,7 +16,7 @@ struct mesh_agent_prov_caps {
 	uint16_t output_action;
 	uint16_t input_action;
 	uint8_t pub_type;
-	uint8_t static_type;
+	uint8_t oob_type;
 	uint8_t output_size;
 	uint8_t input_size;
 };

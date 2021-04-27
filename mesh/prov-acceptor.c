@@ -690,7 +690,7 @@ bool acceptor_start(uint8_t num_ele, uint8_t *uuid,
 	if (caps) {
 		/* TODO: Should we sanity check values here or elsewhere? */
 		prov->conf_inputs.caps.pub_type = caps->pub_type;
-		prov->conf_inputs.caps.static_type = caps->static_type;
+		prov->conf_inputs.caps.oob_type = caps->oob_type;
 		prov->conf_inputs.caps.output_size = caps->output_size;
 		prov->conf_inputs.caps.input_size = caps->input_size;
 
