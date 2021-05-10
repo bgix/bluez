@@ -107,3 +107,11 @@ bool mesh_crypto_check_fcs(const uint8_t *packet, uint8_t packet_len,
 bool mesh_crypto_aes_cmac(const uint8_t key[16], const uint8_t *msg,
 					size_t msg_len, uint8_t res[16]);
 bool mesh_crypto_check_avail(void);
+bool mesh_crypto_s2(const void *info, size_t len, uint8_t salt[32]);
+bool mesh_crypto_aes_hmac(const uint8_t key[32], const uint8_t *msg,
+					size_t msg_len, uint8_t res[32]);
+bool mesh_crypto_prov_conf_key128(const uint8_t secret[32],
+					const uint8_t salt[32],
+					uint8_t conf_key[32]);
+bool mesh_crypto_k5(const uint8_t ikm[32], const uint8_t salt[32],
+		const void *info, size_t info_len, uint8_t okm[32]);

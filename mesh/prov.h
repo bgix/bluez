@@ -84,12 +84,17 @@ struct prov_pub_key_msg {
 
 struct prov_conf_msg {
 	uint8_t opcode;
-	uint8_t conf[16];
+	uint8_t conf[32];
 } __packed;
 
 struct prov_rand_msg {
 	uint8_t opcode;
-	uint8_t rand[16];
+	uint8_t rand[32];
+} __packed;
+
+struct prov_secret_auth {
+	uint8_t secret[32];
+	uint8_t auth[32];
 } __packed;
 
 struct prov_data {
@@ -146,28 +151,30 @@ struct mesh_prov {
 	struct timeval tx_start;
 	struct l_timeout *tx_timeout;
 
-	/* Provisioning credentials and crypto material */
-	struct conf_input conf_inputs;
-	uint8_t dev_key[16];
-	uint8_t conf_salt[16];
-	uint8_t s_key[16];
-	uint8_t s_nonce[13];
-	uint8_t conf_key[16];
-	uint8_t conf[16];
-	uint8_t r_conf[16];
-	uint8_t rand_auth[32];
-	uint8_t prov_salt[16];
-	uint8_t secret[32];
-	uint8_t r_public[64];
-	uint8_t l_public[64];
-	/* End Provisioning credentials and crypto material */
-
 	mesh_prov_open_func_t open_callback;
 	mesh_prov_close_func_t close_callback;
 	mesh_prov_receive_func_t receive_callback;
 	void *receive_data;
 	mesh_prov_send_func_t send_callback;
 	void *send_data;
+
+	#if 0
+	/* Provisioning credentials and crypto material */
+	struct conf_input conf_inputs;
+	uint8_t dev_key[16];
+	//uint8_t conf_salt[32];
+	uint8_t s_key[16];
+	uint8_t s_nonce[13];
+	uint8_t conf_key[16];
+	uint8_t conf[32];
+	uint8_t r_conf[32];
+	//uint8_t rand_auth[64];
+	uint8_t prov_salt[16];
+	uint8_t secret[32];
+	uint8_t auth_val[32];
+	/* End Provisioning credentials and crypto material */
+	#endif
+
 };
 
 struct mesh_prov *mesh_prov_new(struct mesh_net *net, uint16_t remote);

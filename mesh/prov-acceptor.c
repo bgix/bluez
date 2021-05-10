@@ -354,10 +354,10 @@ static bool send_conf(struct mesh_prov_acceptor *prov)
 								msg.conf);
 
 	/* Fail if confirmations match */
-	if (!memcmp(msg.conf, prov->confirm, sizeof(msg.conf)))
+	if (!memcmp(msg.conf, prov->confirm, 16))
 		return false;
 
-	prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
+	prov->trans_tx(prov->trans_data, &msg, 17);
 	return true;
 }
 
@@ -366,8 +366,8 @@ static void send_rand(struct mesh_prov_acceptor *prov)
 	struct prov_rand_msg msg;
 
 	msg.opcode = PROV_RANDOM;
-	memcpy(msg.rand, prov->rand_auth_workspace, sizeof(msg.rand));
-	prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
+	memcpy(msg.rand, prov->rand_auth_workspace, 16);
+	prov->trans_tx(prov->trans_data, &msg, 17);
 }
 
 static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
@@ -417,6 +417,12 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		if (prov->conf_inputs.start.algorithm ||
 				prov->conf_inputs.start.pub_key > 1 ||
 				prov->conf_inputs.start.auth_method > 3) {
+			fail.reason = PROV_ERR_INVALID_FORMAT;
+			goto failure;
+		}
+
+		if ((prov->conf_inputs.caps.oob_type & MESH_PROV_OOB_REQUIRED)
+				&& !prov->conf_inputs.start.auth_method) {
 			fail.reason = PROV_ERR_INVALID_FORMAT;
 			goto failure;
 		}

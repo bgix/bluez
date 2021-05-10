@@ -109,6 +109,14 @@ struct mesh_node;
 #define DEFAULT_MIN_DELAY		0
 #define DEFAULT_MAX_DELAY		25
 
+/* Supported Mesh Provisioning Algorythms */
+#define MESH_PROV_ALG_CMAC_AES128	0
+#define MESH_PROV_ALG_HMAC_SHA256	1
+
+/* Mesh Provisioning OOB Types */
+#define MESH_PROV_OOB_STATIC_AVAIL	0x01
+#define MESH_PROV_OOB_REQUIRED		0x02
+
 struct mesh_net_prov_caps {
 	uint8_t num_ele;
 	uint16_t algorithms;

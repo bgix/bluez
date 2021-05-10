@@ -22,7 +22,7 @@
 #include "mesh/crypto.h"
 
 /* Multiply used Zero array */
-static const uint8_t zero[16] = { 0, };
+static const uint8_t zero[32] = { 0, };
 
 static bool aes_ecb_one(const uint8_t key[16], const uint8_t in[16],
 								uint8_t out[16])
@@ -50,6 +50,40 @@ static bool aes_cmac(void *checksum, const uint8_t *msg,
 		return true;
 
 	return false;
+}
+
+static bool aes_hmac_one(const uint8_t key[32], const void *msg,
+					size_t msg_len, uint8_t res[32])
+{
+	void *checksum;
+	bool result;
+
+	checksum = l_checksum_new_hmac(L_CHECKSUM_SHA256, key, 32);
+	if (!checksum) {
+		l_info("l_checksum_new_hmac failed");
+		return false;
+	}
+
+	result = l_checksum_update(checksum, msg, msg_len);
+
+	if (result) {
+		ssize_t len = l_checksum_get_digest(checksum, res, 32);
+		result = !!(len == 32);
+		if (!result)
+			l_info("l_checksum_get_digest failed");
+	} else
+		l_info("l_checksum_update failed");
+
+	l_checksum_free(checksum);
+	l_info("aes_hmac_one succeeded");
+
+	return result;
+}
+
+bool mesh_crypto_aes_hmac(const uint8_t key[32], const uint8_t *msg,
+					size_t msg_len, uint8_t res[32])
+{
+	return aes_hmac_one(key, msg, msg_len, res);
 }
 
 static bool aes_cmac_one(const uint8_t key[16], const void *msg,
@@ -295,6 +329,18 @@ bool mesh_crypto_k4(const uint8_t a[16], uint8_t out6[1])
 	return true;
 }
 
+bool mesh_crypto_k5(const uint8_t ikm[32], const uint8_t salt[32],
+		const void *info, size_t info_len, uint8_t okm[32])
+{
+	//const uint8_t p[] = { 'p', 'r', 'c', 'k', '2', '5', '6' };
+	uint8_t res[16];
+
+	if (!aes_hmac_one(salt, ikm, 16, res))
+		return false;
+
+	return aes_hmac_one(res, info, info_len, okm);
+}
+
 bool mesh_crypto_beacon_cmac(const uint8_t encryption_key[16],
 				const uint8_t network_id[8],
 				uint32_t iv_index, bool kr, bool iu,
@@ -409,6 +455,11 @@ bool mesh_crypto_s1(const void *info, size_t len, uint8_t salt[16])
 	return aes_cmac_one(zero, info, len, salt);
 }
 
+bool mesh_crypto_s2(const void *info, size_t len, uint8_t salt[32])
+{
+	return aes_hmac_one(zero, info, len, salt);
+}
+
 bool mesh_crypto_prov_prov_salt(const uint8_t conf_salt[16],
 					const uint8_t prov_rand[16],
 					const uint8_t dev_rand[16],
@@ -433,6 +484,19 @@ bool mesh_crypto_prov_conf_key(const uint8_t secret[32],
 		return false;
 
 	return aes_cmac_one(conf_key, prck, 4, conf_key);
+}
+
+bool mesh_crypto_prov_conf_key128(const uint8_t secret_auth[64],
+					const uint8_t salt[32],
+					uint8_t conf_key[32])
+{
+	const uint8_t prck256[7] = "prck256";
+
+	if (!aes_hmac_one(salt, secret_auth, 64, conf_key))
+		return false;
+
+	//print_packet("T", conf_key, 32);
+	return aes_hmac_one(conf_key, prck256, 7, conf_key);
 }
 
 bool mesh_crypto_device_key(const uint8_t secret[32],

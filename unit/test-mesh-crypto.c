@@ -1824,6 +1824,35 @@ static void check_s1(const struct mesh_crypto_test *keys)
 	l_info("");
 }
 
+//static void check_s2(const struct mesh_crypto_test *keys)
+static void check_s2(void)
+{
+	uint8_t tmp_out[32];
+	uint8_t *fixed_data;
+	char *secret_auth = "ab85843a2f6d883f62e5684b38e307335fe6e1945ecd19604105c6f23221eb69" "906d73a3c7a7cb3ff730dca68a46b9c18d673f50e078202311473ebbe253669f";
+	char *salt = "00010003000100000000000001000100002c31a47b5779809ef44cb5eaaf5c3e43d5f8faad4a8794cb987e9b03745c78dd919512183898dfbecd52e2408e43871fd021109117bd3ed4eaf8437743715d4ff465e43ff23d3f1b9dc7dfc04da8758184dbc966204796eccf0d6cf5e16500cc0201d048bcbbd899eeefc424164e33c201c2b010ca6b4d43a8a155cad8ecb279";
+
+	char *confSalt = "a71141ba8cb6b40f4f52b622e1c091614c73fc308f871b78ca775e769bc3ae69";
+	char *conf_key = "210c3c448152e8d59ef742aa7d22ee5ba59a38648bda6bf05c74f3e46fc2c0bb";
+
+	l_info(COLOR_BLUE "[%s]" COLOR_OFF, "s2-stage");
+
+	show_str("Salt Input", 0, salt);
+	fixed_data = l_util_from_hexstring(salt, NULL);
+	//show_str("Salt Input", 0, keys->salt);
+	//mesh_crypto_s2(keys->salt, strlen(keys->salt), tmp_out);
+	mesh_crypto_s2(fixed_data, strlen(salt)/2, tmp_out);
+	l_free(fixed_data);
+	fixed_data = l_util_from_hexstring(secret_auth, NULL);
+
+	//verify_data("s2(Salt)", 0, keys->salt_out, salt_out, 32);
+	verify_data("s2(Salt)", 0, confSalt, tmp_out, 32);
+	mesh_crypto_prov_conf_key128(fixed_data, tmp_out, tmp_out);
+	l_free(fixed_data);
+	verify_data("conf_key(secret_auth)", 0, conf_key, tmp_out, 32);
+	l_info("");
+}
+
 static void check_k128(const struct mesh_crypto_test *keys)
 {
 	uint8_t salt[16];
@@ -2023,9 +2052,50 @@ static void check_k4(const struct mesh_crypto_test *keys)
 	l_info("");
 }
 
+#if 0
+static void check_k5(const struct mesh_crypto_test *keys)
+{
+	uint8_t salt[32];
+	uint8_t info[16];
+	uint8_t t[32];
+	uint8_t okm[16];
+	uint8_t *ikm;
+
+	l_info(COLOR_BLUE "[%s]" COLOR_OFF, keys->name);
+
+	ikm = l_util_from_hexstring(keys->ikm, NULL);
+	show_data("IKM", 0, ikm, 16);
+	l_info("");
+
+	show_str("Salt Input", 0, keys->salt);
+	show_data("Salt Input", 0, keys->salt, strlen(keys->salt));
+	mesh_crypto_s1(keys->salt, strlen(keys->salt), salt);
+	show_data("s1(Salt)", 0, salt, 16);
+	l_info("");
+
+	show_str("Info Input", 0, keys->info);
+	show_data("Info Input", 0, keys->info, strlen(keys->info));
+	mesh_crypto_s1(keys->info, strlen(keys->info), info);
+	show_data("s1(Info)", 0, info, 16);
+	l_info("");
+
+	mesh_crypto_aes_hmac(salt, ikm, 16, t);
+	show_data("T", 0, t, 16);
+	l_info("");
+
+	mesh_crypto_k5(ikm, salt, info, 16, okm);
+
+	verify_data("k5(ikm, salt, info)", 0, keys->okm, okm, 16);
+
+	l_free(ikm);
+	l_info("");
+}
+#endif
+
 int main(int argc, char *argv[])
 {
 	l_log_set_stderr();
+check_s2();
 
 	/* Section 8.1 Sample Data Tests */
 	check_s1(&s8_1_1);
