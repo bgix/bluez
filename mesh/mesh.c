@@ -35,7 +35,7 @@
 #define DEFAULT_CRPL 100
 #define DEFAULT_FRIEND_QUEUE_SZ 32
 
-#define DEFAULT_ALGORITHMS 0x0001
+#define DEFAULT_ALGORITHMS (ALG_CMAC_AES128 | ALG_HMAC_SHA256)
 
 struct scan_filter {
 	uint8_t id;

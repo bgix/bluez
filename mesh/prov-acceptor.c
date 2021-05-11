@@ -41,6 +41,19 @@ static const uint16_t expected_pdu_size[] = {
 	2,	/* PROV_FAILED */
 };
 
+static const uint16_t expected_hmac_pdu_size[] = {
+	2,	/* PROV_INVITE */
+	12,	/* PROV_CAPS */
+	6,	/* PROV_START */
+	65,	/* PROV_PUB_KEY */
+	1,	/* PROV_INP_CMPLT */
+	33,	/* PROV_CONFIRM */
+	33,	/* PROV_RANDOM */
+	34,	/* PROV_DATA */
+	1,	/* PROV_COMPLETE */
+	2,	/* PROV_FAILED */
+};
+
 #define BEACON_TYPE_UNPROVISIONED		0x00
 
 static const uint8_t pkt_filter = MESH_AD_TYPE_PROVISION;
@@ -82,14 +95,23 @@ struct mesh_prov_acceptor {
 	uint8_t expected;
 	int8_t previous;
 	struct conf_input conf_inputs;
-	uint8_t calc_key[16];
-	uint8_t salt[16];
-	uint8_t confirm[16];
+	struct prov_secret_auth d;
+	uint8_t calc_key[32];
+	uint8_t salt[32];
+	uint8_t confirm[32];
+	uint8_t rand[32];
 	uint8_t s_key[16];
 	uint8_t s_nonce[13];
 	uint8_t private_key[32];
-	uint8_t secret[32];
-	uint8_t rand_auth_workspace[48];
+
+	//uint8_t calc_key[16];
+	//uint8_t salt[16];
+	//uint8_t confirm[16];
+	//uint8_t s_key[16];
+	//uint8_t s_nonce[13];
+	//uint8_t private_key[32];
+	//uint8_t secret[32];
+	//uint8_t rand_auth_workspace[48];
 };
 
 static struct mesh_prov_acceptor *prov = NULL;
@@ -199,35 +221,46 @@ static bool prov_calc_secret(const uint8_t *pub, const uint8_t *priv,
 	return true;
 }
 
-static bool acp_credentials(struct mesh_prov_acceptor *prov)
+static bool acp_credentials(struct mesh_prov_acceptor *prov, bool hmac_sha256)
 {
 	if (!memcmp(prov->conf_inputs.prv_pub_key,
 					prov->conf_inputs.dev_pub_key, 64))
 		return false;
 
 	if (!prov_calc_secret(prov->conf_inputs.prv_pub_key,
-			prov->private_key, prov->secret))
+			prov->private_key, prov->d.secret))
 		return false;
 
-	if (!mesh_crypto_s1(&prov->conf_inputs,
-			sizeof(prov->conf_inputs), prov->salt))
-		return false;
+	if (prov->conf_inputs.start.algorithm == MESH_PROV_ALG_HMAC_SHA256) {
+		if (!mesh_crypto_s2(&prov->conf_inputs,
+					sizeof(prov->conf_inputs), prov->salt))
+			return false;
 
-	if (!mesh_crypto_prov_conf_key(prov->secret, prov->salt,
-			prov->calc_key))
-		return false;
+		hmac_sha256 = true;
 
-	l_getrandom(prov->rand_auth_workspace, 16);
+	} else {
+		if (!mesh_crypto_s1(&prov->conf_inputs,
+					sizeof(prov->conf_inputs), prov->salt))
+			return false;
+
+		if (!mesh_crypto_prov_conf_key(prov->d.secret, prov->salt,
+					prov->calc_key))
+			return false;
+	}
+
+	l_getrandom(prov->rand, 32);
 
 	print_packet("PublicKeyProv", prov->conf_inputs.prv_pub_key, 64);
 	print_packet("PublicKeyDev", prov->conf_inputs.dev_pub_key, 64);
 	print_packet("PrivateKeyLocal", prov->private_key, 32);
 	print_packet("ConfirmationInputs", &prov->conf_inputs,
 						sizeof(prov->conf_inputs));
-	print_packet("ECDHSecret", prov->secret, 32);
-	print_packet("LocalRandom", prov->rand_auth_workspace, 16);
-	print_packet("ConfirmationSalt", prov->salt, 16);
-	print_packet("ConfirmationKey", prov->calc_key, 16);
+	print_packet("ECDHSecret", prov->d.secret, 32);
+	print_packet("LocalRandom", prov->rand, hmac_sha256 ? 32 : 16);
+	print_packet("ConfirmationSalt", prov->salt, hmac_sha256 ? 32 : 16);
+	if (!hmac_sha256)
+		print_packet("ConfirmationKey", prov->calc_key, 16);
+
 	return true;
 }
 
@@ -256,9 +289,11 @@ static void number_cb(void *user_data, int err, uint32_t number)
 		return;
 	}
 
-	/* Save two copies, to generate two confirmation values */
-	l_put_be32(number, prov->rand_auth_workspace + 28);
-	l_put_be32(number, prov->rand_auth_workspace + 44);
+	if (prov->conf_inputs.start.algorithm == MESH_PROV_ALG_HMAC_SHA256)
+		l_put_be32(number, prov->d.auth + 28);
+	else
+		l_put_be32(number, prov->d.auth + 12);
+
 	prov->material |= MAT_RAND_AUTH;
 	msg.opcode = PROV_INP_CMPLT;
 	prov->trans_tx(prov->trans_data, &msg.opcode, 1);
@@ -272,22 +307,35 @@ static void static_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 	if (prov != rx_prov)
 		return;
 
-	if (err || !key || len != 16) {
-		msg.opcode = PROV_FAILED;
-		msg.reason = PROV_ERR_UNEXPECTED_ERR;
-		prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
-		return;
+	if (err || !key)
+		goto fail;
+
+	if (prov->conf_inputs.start.algorithm == MESH_PROV_ALG_HMAC_SHA256) {
+		if (len != 32)
+			goto fail;
+
+		memcpy(prov->d.auth, key, 32);
+	} else {
+		if (len != 16)
+			goto fail;
+
+		memset(prov->d.auth, 0, 32);
+		memcpy(prov->d.auth, key, 16);
 	}
 
-	/* Save two copies, to generate two confirmation values */
-	memcpy(prov->rand_auth_workspace + 16, key, 16);
-	memcpy(prov->rand_auth_workspace + 32, key, 16);
 	prov->material |= MAT_RAND_AUTH;
 
 	if (prov->conf_inputs.start.auth_action == PROV_ACTION_IN_ALPHA) {
 		msg.opcode = PROV_INP_CMPLT;
 		prov->trans_tx(prov->trans_data, &msg.opcode, 1);
 	}
+
+	return;
+
+fail:
+	msg.opcode = PROV_FAILED;
+	msg.reason = PROV_ERR_UNEXPECTED_ERR;
+	prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
 }
 
 static void priv_key_cb(void *user_data, int err, uint8_t *key, uint32_t len)
@@ -305,6 +353,7 @@ static void priv_key_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 		return;
 	}
 
+
 	memcpy(prov->private_key, key, 32);
 	ecc_make_public_key(prov->private_key,
 			prov->conf_inputs.dev_pub_key);
@@ -315,7 +364,13 @@ static void priv_key_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 
 	prov->material |= MAT_LOCAL_PRIVATE;
 	if ((prov->material & MAT_SECRET) == MAT_SECRET) {
-		if (!acp_credentials(prov)) {
+		bool hmac_sha256 = false;
+
+		if (prov->conf_inputs.start.algorithm ==
+						MESH_PROV_ALG_HMAC_SHA256)
+			hmac_sha256 = true;
+
+		if (!acp_credentials(prov, hmac_sha256)) {
 			msg.opcode = PROV_FAILED;
 			msg.reason = PROV_ERR_UNEXPECTED_ERR;
 			prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
@@ -345,29 +400,73 @@ static void send_pub_key(struct mesh_prov_acceptor *prov)
 	prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
 }
 
-static bool send_conf(struct mesh_prov_acceptor *prov)
+static bool send_conf(struct mesh_prov_acceptor *prov, bool hmac_sha256)
 {
 	struct prov_conf_msg msg;
+	size_t conf_len = sizeof(msg);
 
 	msg.opcode = PROV_CONFIRM;
-	mesh_crypto_aes_cmac(prov->calc_key, prov->rand_auth_workspace, 32,
-								msg.conf);
+	if (hmac_sha256) {
+		mesh_crypto_prov_conf_key128(prov->d.secret, prov->salt,
+								prov->calc_key);
 
-	/* Fail if confirmations match */
-	if (!memcmp(msg.conf, prov->confirm, 16))
-		return false;
+		print_packet("D-Secret", prov->d.secret, sizeof(prov->d.secret));
+		print_packet("D-Salt", prov->salt, sizeof(prov->salt));
+		print_packet("ConfirmationKey", prov->calc_key, 32);
 
-	prov->trans_tx(prov->trans_data, &msg, 17);
+		mesh_crypto_aes_hmac(prov->calc_key, prov->rand, 32, msg.conf);
+
+		/* Fail if confirmations match */
+		if (!memcmp(msg.conf, prov->confirm, 32))
+			return false;
+	} else {
+		conf_len -= 16;
+		memcpy(prov->rand + 16, prov->d.auth, 16);
+		mesh_crypto_aes_cmac(prov->calc_key, prov->rand, 32, msg.conf);
+
+		/* Fail if confirmations match */
+		if (!memcmp(msg.conf, prov->confirm, 16))
+			return false;
+	}
+
+	prov->trans_tx(prov->trans_data, &msg, conf_len);
 	return true;
 }
 
-static void send_rand(struct mesh_prov_acceptor *prov)
+static bool check_confirm(struct mesh_prov_acceptor *prov, const uint8_t *rand,
+							bool hmac_sha256)
+{
+	/* Calculate expected Provisioner Confirm */
+	if (hmac_sha256)
+		mesh_crypto_aes_hmac(prov->calc_key, rand, 32, prov->calc_key);
+	else {
+		uint8_t tmp[32];
+
+		memcpy(tmp, rand, 16);
+		memcpy(tmp + 16, prov->d.auth, 16);
+		mesh_crypto_aes_cmac(prov->calc_key, tmp, 32, prov->calc_key);
+	}
+
+	/* Compare our calculation with Provisioners */
+	if (memcmp(prov->calc_key, prov->confirm, hmac_sha256 ? 32 : 16))
+		return false;
+	else
+		return true;
+}
+
+static void send_rand(struct mesh_prov_acceptor *prov, bool hmac_sha256)
 {
 	struct prov_rand_msg msg;
+	size_t len;
+
+	if (hmac_sha256)
+		len = sizeof(msg);
+	else
+		len = sizeof(msg) - 16;
 
 	msg.opcode = PROV_RANDOM;
-	memcpy(msg.rand, prov->rand_auth_workspace, 16);
-	prov->trans_tx(prov->trans_data, &msg, 17);
+	memcpy(msg.rand, prov->rand, sizeof(msg.rand));
+	prov->trans_tx(prov->trans_data, &msg, len);
 }
 
 static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
@@ -379,6 +478,7 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 	uint8_t type = *data++;
 	uint32_t oob_key;
 	uint64_t decode_mic;
+	bool hmac_sha256 = false;
 	bool result;
 
 	if (rx_prov != prov || !prov->trans_tx)
@@ -396,10 +496,15 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		goto failure;
 	}
 
+	if (prov->conf_inputs.start.algorithm == MESH_PROV_ALG_HMAC_SHA256)
+		hmac_sha256 = true;
+
 	if (type >= L_ARRAY_SIZE(expected_pdu_size) ||
-					len != expected_pdu_size[type]) {
-		l_error("Expected PDU size %d, Got %d (type: %2.2x)",
-			len, expected_pdu_size[type], type);
+			(!hmac_sha256 && len != expected_pdu_size[type]) ||
+			(hmac_sha256 && len != expected_hmac_pdu_size[type])) {
+
+		l_error("Unexpected PDU size %d, for type: %2.2x", len, type);
+
 		fail.reason = PROV_ERR_INVALID_FORMAT;
 		goto failure;
 	}
@@ -414,7 +519,8 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		memcpy(&prov->conf_inputs.start, data,
 				sizeof(prov->conf_inputs.start));
 
-		if (prov->conf_inputs.start.algorithm ||
+		if (prov->conf_inputs.start.algorithm >
+						MESH_PROV_ALG_HMAC_SHA256 ||
 				prov->conf_inputs.start.pub_key > 1 ||
 				prov->conf_inputs.start.auth_method > 3) {
 			fail.reason = PROV_ERR_INVALID_FORMAT;
@@ -457,13 +563,15 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		if ((prov->material & MAT_SECRET) != MAT_SECRET)
 			return;
 
-		if (!acp_credentials(prov)) {
+		if (!acp_credentials(prov, hmac_sha256)) {
 			fail.reason = PROV_ERR_UNEXPECTED_ERR;
 			goto failure;
 		}
 
 		if (!prov->conf_inputs.start.pub_key)
 			send_pub_key(prov);
+
+		memset(prov->d.auth, 0, sizeof(prov->d.auth));
 
 		/* Start Step 3 */
 		switch (prov->conf_inputs.start.auth_method) {
@@ -476,7 +584,7 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 			/* Auth Type 3c - Static OOB */
 			/* Prompt Agent for Static OOB */
 			fail.reason = mesh_agent_request_static(prov->agent,
-					static_cb, prov);
+					static_cb, hmac_sha256 ? 32 : 16, prov);
 
 			if (fail.reason)
 				goto failure;
@@ -489,8 +597,11 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 			oob_key %= digit_mod(prov->conf_inputs.start.auth_size);
 
 			/* Save two copies, for two confirmation values */
-			l_put_be32(oob_key, prov->rand_auth_workspace + 28);
-			l_put_be32(oob_key, prov->rand_auth_workspace + 44);
+			if (hmac_sha256)
+				l_put_be32(oob_key, prov->d.auth + 28);
+			else
+				l_put_be32(oob_key, prov->d.auth + 12);
+
 			prov->material |= MAT_RAND_AUTH;
 
 			if (prov->conf_inputs.start.auth_action ==
@@ -537,10 +648,10 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 
 	case PROV_CONFIRM: /* Confirmation */
 		/* Save Provisioners confirmation for later compare */
-		memcpy(prov->confirm, data, 16);
+		memcpy(prov->confirm, data, hmac_sha256 ? 32 : 16);
 		prov->expected = PROV_RANDOM;
 
-		if (!send_conf(prov)) {
+		if (!send_conf(prov, hmac_sha256)) {
 			fail.reason = PROV_ERR_INVALID_PDU;
 			goto failure;
 		}
@@ -549,46 +660,39 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 	case PROV_RANDOM: /* Random Value */
 
 		/* Disallow matching random values */
-		if (!memcmp(prov->rand_auth_workspace, data, 16)) {
+		if (!memcmp(prov->rand, data, hmac_sha256 ? 32 : 16)) {
 			fail.reason = PROV_ERR_INVALID_PDU;
+			goto failure;
+		}
+
+		if (!check_confirm(prov, data, hmac_sha256)) {
+			fail.reason = PROV_ERR_CONFIRM_FAILED;
 			goto failure;
 		}
 
 		/* Calculate Session key (needed later) while data is fresh */
 		mesh_crypto_prov_prov_salt(prov->salt, data,
-						prov->rand_auth_workspace,
+						prov->rand,
 						prov->salt);
-		mesh_crypto_session_key(prov->secret, prov->salt, prov->s_key);
-		mesh_crypto_nonce(prov->secret, prov->salt, prov->s_nonce);
-
-		/* Calculate expected Provisioner Confirm */
-		memcpy(prov->rand_auth_workspace + 16, data, 16);
-		mesh_crypto_aes_cmac(prov->calc_key,
-					prov->rand_auth_workspace + 16, 32,
-					prov->calc_key);
-
-		/* Compare our calculation with Provisioners */
-		if (memcmp(prov->calc_key, prov->confirm, 16)) {
-			fail.reason = PROV_ERR_CONFIRM_FAILED;
-			goto failure;
-		}
+		mesh_crypto_session_key(prov->d.secret, prov->salt,
+								prov->s_key);
+		mesh_crypto_nonce(prov->d.secret, prov->salt, prov->s_nonce);
 
 		/* Send Random value we used */
-		send_rand(prov);
+		send_rand(prov, hmac_sha256);
 		prov->expected = PROV_DATA;
 		break;
 
 	case PROV_DATA: /* Provisioning Data */
 
 		/* Calculate our device key */
-		mesh_crypto_device_key(prov->secret,
-				prov->salt,
-				prov->calc_key);
+		mesh_crypto_device_key(prov->d.secret, prov->salt,
+							prov->calc_key);
 
 		/* Decrypt new node data into workspace */
 		mesh_crypto_aes_ccm_decrypt(prov->s_nonce, prov->s_key,
 				NULL, 0,
-				data, len - 1, prov->rand_auth_workspace,
+				data, len - 1, prov->rand,
 				&decode_mic, sizeof(decode_mic));
 
 		/* Validate that the data hasn't been messed with in transit */
@@ -601,17 +705,16 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		info = l_malloc(sizeof(struct mesh_prov_node_info));
 
 		memcpy(info->device_key, prov->calc_key, 16);
-		memcpy(info->net_key, prov->rand_auth_workspace, 16);
-		info->net_index = l_get_be16(prov->rand_auth_workspace + 16);
-		info->flags = prov->rand_auth_workspace[18];
-		info->iv_index = l_get_be32(prov->rand_auth_workspace + 19);
-		info->unicast = l_get_be16(prov->rand_auth_workspace + 23);
+		memcpy(info->net_key, prov->rand, 16);
+		info->net_index = l_get_be16(prov->rand + 16);
+		info->flags = prov->rand[18];
+		info->iv_index = l_get_be32(prov->rand + 19);
+		info->unicast = l_get_be16(prov->rand + 23);
 		info->num_ele = prov->conf_inputs.caps.num_ele;
 
 		/* Send prov complete */
-		prov->rand_auth_workspace[0] = PROV_COMPLETE;
-		prov->trans_tx(prov->trans_data,
-				prov->rand_auth_workspace, 1);
+		prov->rand[0] = PROV_COMPLETE;
+		prov->trans_tx(prov->trans_data, prov->rand, 1);
 
 		result = prov->cmplt(prov->caller_data, PROV_ERR_SUCCESS, info);
 		prov->cmplt = NULL;

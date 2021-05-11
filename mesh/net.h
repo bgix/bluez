@@ -111,7 +111,9 @@ struct mesh_node;
 
 /* Supported Mesh Provisioning Algorythms */
 #define MESH_PROV_ALG_CMAC_AES128	0
+#define ALG_CMAC_AES128		(1 << MESH_PROV_ALG_CMAC_AES128)
 #define MESH_PROV_ALG_HMAC_SHA256	1
+#define ALG_HMAC_SHA256	(1 << MESH_PROV_ALG_HMAC_SHA256)
 
 /* Mesh Provisioning OOB Types */
 #define MESH_PROV_OOB_STATIC_AVAIL	0x01

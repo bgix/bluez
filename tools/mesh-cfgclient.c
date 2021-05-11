@@ -121,7 +121,10 @@ static struct model_info *cfgcli;
 static struct l_queue *devices;
 
 static bool prov_in_progress;
-static const char *caps[] = {"static-oob", "out-numeric", "in-numeric"};
+static const char *caps[] = {"static-256",
+				"static-oob",
+				"out-numeric",
+				"in-numeric"};
 
 static bool have_config;
 
@@ -470,7 +473,7 @@ static void agent_input_done(oob_type_t type, void *buf, uint16_t len,
 	struct l_dbus_message *reply = NULL;
 	struct l_dbus_message_builder *builder;
 	uint32_t val_u32;
-	uint8_t oob_data[16];
+	uint8_t oob_data[32];
 
 	switch (type) {
 	case NONE:
@@ -486,15 +489,15 @@ static void agent_input_done(oob_type_t type, void *buf, uint16_t len,
 		/* Fall Through */
 
 	case HEXADECIMAL:
-		if (len > 16) {
+		if (len > 32) {
 			bt_shell_printf("Bad input length\n");
 			break;
 		}
-		memset(oob_data, 0, 16);
+		memset(oob_data, 0, 32);
 		memcpy(oob_data, buf, len);
 		reply = l_dbus_message_new_method_return(msg);
 		builder = l_dbus_message_builder_new(reply);
-		append_byte_array(builder, oob_data, 16);
+		append_byte_array(builder, oob_data, len);
 		l_dbus_message_builder_finalize(builder);
 		l_dbus_message_builder_destroy(builder);
 		break;
@@ -646,9 +649,13 @@ static struct l_dbus_message *prompt_static_call(struct l_dbus *dbus,
 		l_dbus_message_ref(msg);
 		agent_input_request(ASCII, 8, "Enter displayed Ascii code",
 							agent_input_done, msg);
+	} else if (!strcmp(str, "static-256")) {
+		l_dbus_message_ref(msg);
+		agent_input_request(HEXADECIMAL, 32, "Enter 256 bit Static Key",
+							agent_input_done, msg);
 	} else if (!strcmp(str, "static-oob")) {
 		l_dbus_message_ref(msg);
-		agent_input_request(HEXADECIMAL, 16, "Enter Static Key",
+		agent_input_request(HEXADECIMAL, 16, "Enter 128 bit Static Key",
 							agent_input_done, msg);
 	} else
 		return l_dbus_message_new_error(msg, dbus_err_support, NULL);

@@ -525,8 +525,8 @@ static bool start_dev_key_refresh(struct mesh_node *node, uint8_t nppi_proc,
 		return false;
 
 	prov->nppi_proc = nppi_proc;
-	return acceptor_start(num_ele, NULL, 0x0001, 60, NULL, nppi_cmplt,
-									prov);
+	return acceptor_start(num_ele, NULL, ALG_CMAC_AES128, 60, NULL,
+							nppi_cmplt, prov);
 }
 
 static bool remprv_srv_pkt(uint16_t src, uint16_t unicast, uint16_t app_idx,

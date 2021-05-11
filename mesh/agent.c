@@ -467,10 +467,8 @@ static void key_reply(struct l_dbus_message *reply, void *user_data)
 		expected_len = 32;
 	else if (req->type == MESH_AGENT_REQUEST_PUBLIC_KEY)
 		expected_len = 64;
-	else
-		expected_len = 16;
 
-	if (n != expected_len) {
+	if (expected_len && n != expected_len) {
 		l_error("Bad response length: %u (need %u)", n, expected_len);
 		err = MESH_ERROR_FAILED;
 		n = 0;
@@ -694,10 +692,10 @@ int mesh_agent_prompt_alpha(struct mesh_agent *agent, bool initiator,
 }
 
 int mesh_agent_request_static(struct mesh_agent *agent, mesh_agent_key_cb_t cb,
-								void *user_data)
+						uint8_t len, void *user_data)
 {
-	return prompt_input(agent, "static-oob", MESH_AGENT_REQUEST_STATIC_OOB,
-							false, cb, user_data);
+	return prompt_input(agent, len == 32 ? "static-256" : "static-oob",
+			MESH_AGENT_REQUEST_STATIC_OOB, false, cb, user_data);
 }
 
 int mesh_agent_request_private_key(struct mesh_agent *agent,

@@ -50,7 +50,7 @@ int mesh_agent_prompt_number(struct mesh_agent *agent, bool initiator,
 int mesh_agent_prompt_alpha(struct mesh_agent *agent, bool initiator,
 				mesh_agent_key_cb_t cb, void *user_data);
 int mesh_agent_request_static(struct mesh_agent *agent, mesh_agent_key_cb_t cb,
-							void *user_data);
+						uint8_t len, void *user_data);
 int mesh_agent_request_private_key(struct mesh_agent *agent,
 							mesh_agent_key_cb_t cb,
 							void *user_data);

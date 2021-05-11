@@ -116,8 +116,6 @@ struct mesh_prov_initiator {
 	uint8_t s_key[16];
 	uint8_t s_nonce[13];
 	uint8_t private_key[32];
-	//uint8_t secret[32];
-	//uint8_t authvalue[32];
 	uint8_t uuid[16];
 };
 
@@ -332,6 +330,10 @@ static void send_confirm(struct mesh_prov_initiator *prov, bool hmac_sha256)
 	if (hmac_sha256) {
 		mesh_crypto_prov_conf_key128(prov->d.secret, prov->salt,
 								prov->calc_key);
+
+		print_packet("P-Secret", prov->d.secret, sizeof(prov->d.secret));
+		print_packet("P-Salt", prov->salt, sizeof(prov->salt));
+		print_packet("ConfirmationKey", prov->calc_key, 32);
 		mesh_crypto_aes_hmac(prov->calc_key, prov->rand, 32, msg.conf);
 	} else {
 		conf_len -= 16;
@@ -390,11 +392,13 @@ static void static_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 			goto fail;
 
 		memcpy(prov->d.auth, key, 32);
+		memcpy(prov->d.auth, key, 16);
 		send_confirm(prov, true);
 	} else {
 		if (len != 16)
 			goto fail;
 
+		memset(prov->d.auth, 0, 32);
 		memcpy(prov->d.auth, key, 16);
 		send_confirm(prov, false);
 	}
@@ -402,6 +406,7 @@ static void static_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 	return;
 
 fail:
+	l_debug("XXX - err: %d -- key: %p -- len: %d", err, key, len);
 	msg.opcode = PROV_FAILED;
 	msg.reason = PROV_ERR_UNEXPECTED_ERR;
 	prov->trans_tx(prov->trans_data, &msg, sizeof(msg));
@@ -603,8 +608,8 @@ static void int_prov_auth(bool hmac_sha256)
 	case 1:
 		/* Auth Type 3c - Static OOB */
 		/* Prompt Agent for Static OOB */
-		fail_code[1] = mesh_agent_request_static(prov->agent,
-				static_cb, prov);
+		fail_code[1] = mesh_agent_request_static(prov->agent, static_cb,
+						hmac_sha256 ? 32 : 16, prov);
 
 		if (fail_code[1])
 			goto failure;
@@ -752,7 +757,7 @@ static void int_prov_rx(void *user_data, const void *dptr, uint16_t len)
 			(!hmac_sha256 && len != expected_pdu_size[type]) ||
 			(hmac_sha256 && len != expected_hmac_pdu_size[type])) {
 
-		l_error("Unxpected PDU size %d, for type: %2.2x", len, type);
+		l_error("Unexpected PDU size %d, for type: %2.2x", len, type);
 
 		fail_code[1] = PROV_ERR_INVALID_FORMAT;
 		goto failure;
@@ -773,7 +778,14 @@ static void int_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		l_debug("Got input_size %d", data[8]);
 		l_debug("Got input_action %d", l_get_be16(data + 9));
 
-		if (!(l_get_be16(data + 1) & 0x0001)) {
+
+		if (l_get_be16(data + 1) & ALG_HMAC_SHA256)
+			prov->conf_inputs.start.algorithm =
+						MESH_PROV_ALG_HMAC_SHA256;
+		else if (l_get_be16(data + 1) & ALG_CMAC_AES128)
+			prov->conf_inputs.start.algorithm =
+						MESH_PROV_ALG_CMAC_AES128;
+		else {
 			l_error("Unsupported Algorithm");
 			fail_code[1] = PROV_ERR_INVALID_FORMAT;
 			goto failure;

@@ -1313,17 +1313,18 @@ Methods:
 		This agent should prompt the user for specific input. For
 		instance: "Enter value being displayed by remote device".
 
-	array{byte}[16] PromptStatic(string type)
+	array{byte}[] PromptStatic(string type)
 
-		This method is called when the Daemon requires a 16 octet byte
-		array, as an Out-of-Band authentication.
+		This method is called when the Daemon requires a 16 or 32 octet
+		byte array, as an Out-of-Band authentication.
 
 		The type parameter indicates the input method. Allowed values
 		are:
 			"static-oob" - return 16 octet array
+			"static-256" - return 32 octet array
 			"in-alpha" - return 16 octet alpha array
 
-		The Static data returned must be 16 octets in size, or the
+		The Static data returned must be 16 or 32 octets in size, or the
 		Provisioning procedure will fail and be canceled. If input type
 		is "in-alpha", the printable characters should be
 		left-justified, with trailing 0x00 octets filling the remaining
@@ -1350,6 +1351,7 @@ Properties:
 			"in-numeric"
 			"in-alpha"
 			"static-oob"
+			"static-256"
 			"public-oob"
 
 	array{string} OutOfBandInfo [read-only, optional]

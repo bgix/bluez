@@ -36,6 +36,7 @@ class Agent(dbus.service.Object):
 		oob = []
 		caps.append('out-numeric')
 		caps.append('static-oob')
+		caps.append('static-256')
 		oob.append('other')
 		return {
 			AGENT_IFACE: {
@@ -58,11 +59,15 @@ class Agent(dbus.service.Object):
 
 	@dbus.service.method(AGENT_IFACE, in_signature="s", out_signature="ay")
 	def PromptStatic(self, type):
-		static_key = numpy.random.randint(0, 255, 16)
-		key_str = array_to_string(static_key)
+		if type == 'static-oob':
+			static_key = numpy.random.randint(0, 255, 16)
+			key_str = array_to_string(static_key)
+		elif type == 'static-256':
+			static_key = numpy.random.randint(0, 255, 32)
+			key_str = array_to_string(static_key)
 
 		print(set_cyan('PromptStatic ('), type, set_cyan(')'))
-		print(set_cyan('Enter 16 octet key on remote device: '),
+		print(set_cyan('Enter octet key on remote device: '),
 							set_green(key_str));
 
 		return dbus.Array(static_key, signature='y')
