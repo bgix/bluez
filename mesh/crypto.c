@@ -474,6 +474,20 @@ bool mesh_crypto_prov_prov_salt(const uint8_t conf_salt[16],
 	return aes_cmac_one(zero, tmp, sizeof(tmp), prov_salt);
 }
 
+bool mesh_crypto_prov_prov_salt256(const uint8_t conf_salt[32],
+					const uint8_t prov_rand[32],
+					const uint8_t dev_rand[32],
+					uint8_t prov_salt[16])
+{
+	uint8_t tmp[32 * 3];
+
+	memcpy(tmp, conf_salt, 32);
+	memcpy(tmp + 32, prov_rand, 32);
+	memcpy(tmp + 64, dev_rand, 32);
+
+	return aes_cmac_one(zero, tmp, sizeof(tmp), prov_salt);
+}
+
 bool mesh_crypto_prov_conf_key(const uint8_t secret[32],
 					const uint8_t salt[16],
 					uint8_t conf_key[16])

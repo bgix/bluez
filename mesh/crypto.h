@@ -54,6 +54,10 @@ bool mesh_crypto_prov_prov_salt(const uint8_t conf_salt[16],
 					const uint8_t prov_rand[16],
 					const uint8_t dev_rand[16],
 					uint8_t prov_salt[16]);
+bool mesh_crypto_prov_prov_salt256(const uint8_t conf_salt[32],
+					const uint8_t prov_rand[32],
+					const uint8_t dev_rand[32],
+					uint8_t prov_salt[16]);
 bool mesh_crypto_prov_conf_key(const uint8_t secret[32],
 					const uint8_t salt[16],
 					uint8_t conf_key[16]);

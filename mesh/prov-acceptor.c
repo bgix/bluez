@@ -671,9 +671,15 @@ static void acp_prov_rx(void *user_data, const void *dptr, uint16_t len)
 		}
 
 		/* Calculate Session key (needed later) while data is fresh */
-		mesh_crypto_prov_prov_salt(prov->salt, data,
+		if (hmac_sha256)
+			mesh_crypto_prov_prov_salt256(prov->salt, data,
 						prov->rand,
 						prov->salt);
+		else
+			mesh_crypto_prov_prov_salt(prov->salt, data,
+						prov->rand,
+						prov->salt);
+
 		mesh_crypto_session_key(prov->d.secret, prov->salt,
 								prov->s_key);
 		mesh_crypto_nonce(prov->d.secret, prov->salt, prov->s_nonce);

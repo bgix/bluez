@@ -306,14 +306,17 @@ static uint32_t digit_mod(uint8_t power)
 	return ret;
 }
 
-static void calc_local_material(const uint8_t *random)
+static void calc_local_material(const uint8_t *random, bool hmac_sha256)
 {
 	/* Calculate SessionKey while the data is fresh */
-	mesh_crypto_prov_prov_salt(prov->salt,
-			prov->rand, random,
-			prov->salt);
-	mesh_crypto_session_key(prov->d.secret, prov->salt,
-			prov->s_key);
+	if (hmac_sha256)
+		mesh_crypto_prov_prov_salt256(prov->salt, prov->rand, random,
+								prov->salt);
+	else
+		mesh_crypto_prov_prov_salt(prov->salt, prov->rand, random,
+								prov->salt);
+
+	mesh_crypto_session_key(prov->d.secret, prov->salt, prov->s_key);
 	mesh_crypto_nonce(prov->d.secret, prov->salt, prov->s_nonce);
 
 	print_packet("SessionKey", prov->s_key, sizeof(prov->s_key));
@@ -878,8 +881,9 @@ static void int_prov_rx(void *user_data, const void *dptr, uint16_t len)
 			goto failure;
 		}
 
-		/* RXed Device Confirmation */
-		calc_local_material(data);
+		/* Calculate local material with fresh randoms */
+		calc_local_material(data, hmac_sha256);
+
 		memcpy(prov->rand, data, hmac_sha256 ? 32 : 16);
 		print_packet("RandomDevice", data, hmac_sha256 ? 32 : 16);
 

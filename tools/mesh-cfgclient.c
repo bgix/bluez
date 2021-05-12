@@ -123,6 +123,11 @@ static struct l_queue *devices;
 static bool prov_in_progress;
 static const char *caps[] = {"static-256",
 				"static-oob",
+				"push",
+				"twist",
+				"blink",
+				"beep",
+				"vibrate",
 				"out-numeric",
 				"in-numeric"};
 
