@@ -123,11 +123,14 @@ static struct l_queue *devices;
 static bool prov_in_progress;
 static const char *caps[] = {"static-256",
 				"static-oob",
-				"push",
-				"twist",
 				"blink",
 				"beep",
 				"vibrate",
+				"out-alpha",
+				"push",
+				"twist",
+				"in-alpha",
+				"public-oob",
 				"out-numeric",
 				"in-numeric"};
 
@@ -478,7 +481,7 @@ static void agent_input_done(oob_type_t type, void *buf, uint16_t len,
 	struct l_dbus_message *reply = NULL;
 	struct l_dbus_message_builder *builder;
 	uint32_t val_u32;
-	uint8_t oob_data[32];
+	uint8_t oob_data[64];
 
 	switch (type) {
 	case NONE:
@@ -494,11 +497,11 @@ static void agent_input_done(oob_type_t type, void *buf, uint16_t len,
 		/* Fall Through */
 
 	case HEXADECIMAL:
-		if (len > 32) {
+		if (len > sizeof(oob_data)) {
 			bt_shell_printf("Bad input length\n");
 			break;
 		}
-		memset(oob_data, 0, 32);
+		memset(oob_data, 0, sizeof(oob_data));
 		memcpy(oob_data, buf, len);
 		reply = l_dbus_message_new_method_return(msg);
 		builder = l_dbus_message_builder_new(reply);
@@ -639,6 +642,16 @@ static struct l_dbus_message *prompt_numeric_call(struct l_dbus *dbus,
 	return NULL;
 }
 
+
+static struct l_dbus_message *prompt_public_key(struct l_dbus *dbus,
+						struct l_dbus_message *msg,
+						void *user_data)
+{
+	l_dbus_message_ref(msg);
+	agent_input_request(HEXADECIMAL, 64, "Enter 512 bit Public Key",
+							agent_input_done, msg);
+	return NULL;
+}
 static struct l_dbus_message *prompt_static_call(struct l_dbus *dbus,
 						struct l_dbus_message *msg,
 						void *user_data)
@@ -681,6 +694,8 @@ static void setup_agent_iface(struct l_dbus_interface *iface)
 						"u", "s", "number", "type");
 	l_dbus_interface_method(iface, "PromptStatic", 0, prompt_static_call,
 						"ay", "s", "data", "type");
+	l_dbus_interface_method(iface, "PublicKey", 0, prompt_public_key,
+						"ay", "", "data");
 }
 
 static bool register_agent(void)
