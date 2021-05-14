@@ -252,7 +252,11 @@ static bool acp_credentials(struct mesh_prov_acceptor *prov, bool hmac_sha256)
 
 	print_packet("PublicKeyProv", prov->conf_inputs.prv_pub_key, 64);
 	print_packet("PublicKeyDev", prov->conf_inputs.dev_pub_key, 64);
+
+	/* Normaize for debug out -- No longer needed for calculations */
+	swap_u256_bytes(prov->private_key);
 	print_packet("PrivateKeyLocal", prov->private_key, 32);
+
 	print_packet("ConfirmationInputs", &prov->conf_inputs,
 						sizeof(prov->conf_inputs));
 	print_packet("ECDHSecret", prov->d.secret, 32);
@@ -354,9 +358,9 @@ static void priv_key_cb(void *user_data, int err, uint8_t *key, uint32_t len)
 	}
 
 
+	swap_u256_bytes(key);
 	memcpy(prov->private_key, key, 32);
-	ecc_make_public_key(prov->private_key,
-			prov->conf_inputs.dev_pub_key);
+	ecc_make_public_key(prov->private_key, prov->conf_inputs.dev_pub_key);
 
 	/* Convert to Mesh byte order */
 	swap_u256_bytes(prov->conf_inputs.dev_pub_key);
