@@ -416,8 +416,14 @@ void net_key_beacon_seen(uint32_t id)
 	struct net_key *key = l_queue_find(keys, match_id, L_UINT_TO_PTR(id));
 
 	if (key) {
+<<<<<<< HEAD
 		key->snb.observed++;
 		key->snb.ts = get_timestamp_secs();
+=======
+		key->observe.seen++;
+		key->observe.ts = get_timestamp_secs();
+		l_debug("seen - %d - %d", key->observe.seen, key->observe.ts);
+>>>>>>> 9c9210940 (Mesh_MGMT_IO_vm)
 	}
 }
 

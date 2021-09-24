@@ -38,6 +38,7 @@ struct mesh_io_private {
 	void *user_data;
 	mesh_io_ready_func_t ready_callback;
 	struct l_timeout *tx_timeout;
+	struct l_queue *dup_filters;
 	struct l_queue *rx_regs;
 	struct l_queue *tx_pkts;
 	struct tx_pkt *tx;
@@ -77,6 +78,14 @@ struct tx_pattern {
 	uint8_t				len;
 };
 
+#define DUP_FILTER_TIME        1000
+/* Accept one instance of unique message a second */
+struct dup_filter {
+	uint64_t data;
+	uint32_t instant;
+	uint8_t addr[6];
+} __packed;
+
 static struct mesh_io_private *pvt;
 
 static void read_index_list_cb(uint8_t status, uint16_t length,
@@ -98,6 +107,72 @@ static uint32_t instant_remaining_ms(uint32_t instant)
 {
 	instant -= get_instant();
 	return instant;
+}
+
+static bool find_by_addr(const void *a, const void *b)
+{
+	const struct dup_filter *filter = a;
+	return !memcmp(filter->addr, b, 6);
+}
+
+static void filter_timeout (struct l_timeout *timeout, void *user_data)
+{
+	struct dup_filter *filter;
+	uint32_t instant, delta;
+
+	if (!pvt)
+		goto done;
+
+	instant = get_instant();
+
+	filter = l_queue_peek_tail(pvt->dup_filters);
+	while (filter) {
+		delta = instant - filter->instant;
+		if (delta >= DUP_FILTER_TIME) {
+			l_queue_remove(pvt->dup_filters, filter);
+			l_free(filter);
+		} else {
+			l_timeout_modify(timeout, 1);
+			return;
+		}
+
+		filter = l_queue_peek_tail(pvt->dup_filters);
+	}
+
+done:
+	l_timeout_remove(timeout);
+}
+
+/* Ignore consequtive duplicate advertisements within timeout period */
+static bool filter_dups(const uint8_t *addr, const uint8_t *adv,
+                                                       uint32_t instant)
+{
+	struct dup_filter *filter;
+	uint32_t instant_delta;
+	uint64_t data = l_get_be64(adv);
+
+	filter = l_queue_remove_if(pvt->dup_filters, find_by_addr, addr);
+	if (!filter) {
+		filter = l_new(struct dup_filter, 1);
+		memcpy(filter->addr, addr, 6);
+	}
+
+	/* Start filter expiration timer */
+	if (!l_queue_length(pvt->dup_filters))
+		l_timeout_create(1, filter_timeout, NULL, NULL);
+
+	l_queue_push_head(pvt->dup_filters, filter);
+	instant_delta = instant - filter->instant;
+
+	if (instant_delta >= DUP_FILTER_TIME || data != filter->data) {
+		filter->instant = instant;
+		filter->data = data;
+		//l_debug("pass - %lx", data);
+		return false;
+	}
+
+	//l_debug("filter - %lx", data);
+	return true;
 }
 
 static void process_rx_callbacks(void *v_reg, void *v_rx)
@@ -144,6 +219,9 @@ static void event_device_found(uint16_t index, uint16_t length,
 	adv = ev->eir;
 	adv_len = ev->eir_len;
 	addr = ev->addr.bdaddr.b;
+
+	if (filter_dups(addr, adv, instant))
+		return;
 
 	while (len < adv_len - 1) {
 		uint8_t field_len = adv[0];
@@ -528,15 +606,10 @@ static void ctl_up(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	int index = L_PTR_TO_UINT(user_data);
-	char connectable[] = { 0 };
 
 	l_debug("HCI%d is up status: %d", index, status);
 	if (status)
 		return;
-
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_CONNECTABLE, index,
-				sizeof(connectable), connectable,
-				con_set, L_UINT_TO_PTR(index), NULL);
 
 	pvt->controllers |= 1 << index;
 
@@ -551,6 +624,7 @@ static void ctl_up(uint8_t status, uint16_t length,
 static void read_info_cb(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
+	unsigned char le[] = { 0x02 };
 	int index = L_PTR_TO_UINT(user_data);
 	const struct mgmt_rp_read_info *rp = param;
 	uint32_t current_settings, supported_settings;
@@ -589,13 +663,14 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		return;
 
 	if (!(current_settings & MGMT_SETTING_POWERED)) {
+		char connectable[] = { 0 };
+
 		/* TODO: Initialize this HCI controller */
 		l_info("Controller hci %u not in use", index);
 		if (0)
 			hci_init(index);
 		else {
 			unsigned char power[] = { 0x01 };
-			unsigned char le[] = { 0x02 };
 
 			mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
 						sizeof(le), &le,
@@ -604,10 +679,27 @@ static void read_info_cb(uint8_t status, uint16_t length,
 			mgmt_send(pvt->mgmt, MGMT_OP_SET_POWERED, index,
 					sizeof(power), &power,
 					ctl_up, L_UINT_TO_PTR(index), NULL);
+
+			mgmt_send(pvt->mgmt, MGMT_OP_SET_CONNECTABLE, index,
+				sizeof(connectable), connectable,
+				con_set, L_UINT_TO_PTR(index), NULL);
+
 		}
-	} else
+	} else {
+		char disco[] = { 6 };
+
 		l_info("Controller hci %u already in use (%x)",
 						index, current_settings);
+
+		/* Share this controller with bluetoothd */
+		mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
+				sizeof(le), &le,
+				ctl_up, L_UINT_TO_PTR(index), NULL);
+
+		mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
+				sizeof(disco), disco, disco_cb, NULL, NULL);
+
+	}
 }
 
 static void index_added(uint16_t index, uint16_t length, const void *param,
@@ -716,6 +808,7 @@ static bool dev_init(struct mesh_io *io, void *opts,
 	mgmt_register(pvt->mgmt, MGMT_EV_DEVICE_FOUND, MGMT_INDEX_NONE,
 						event_device_found, io, NULL);
 
+	pvt->dup_filters = l_queue_new();
 	pvt->rx_regs = l_queue_new();
 	pvt->tx_pkts = l_queue_new();
 
@@ -768,6 +861,7 @@ static bool dev_destroy(struct mesh_io *io)
 
 	bt_hci_unref(pvt->hci);
 	l_timeout_remove(pvt->tx_timeout);
+	l_queue_destroy(pvt->dup_filters, l_free);
 	l_queue_destroy(pvt->rx_regs, l_free);
 	l_queue_destroy(pvt->tx_pkts, l_free);
 	io->pvt = NULL;
