@@ -757,6 +757,13 @@ struct mgmt_cp_add_adv_patterns_monitor_rssi {
 	struct mgmt_adv_pattern patterns[0];
 } __packed;
 
+#define MGMT_OP_SET_MESH		0x0057
+struct mgmt_cp_set_mesh {
+	uint8_t   enable;
+	uint8_t   active;
+	uint8_t   ad_types[];
+} __packed;
+
 #define MGMT_EV_CMD_COMPLETE		0x0001
 struct mgmt_ev_cmd_complete {
 	uint16_t opcode;
@@ -1032,6 +1039,21 @@ struct mgmt_ev_adv_monitor_device_lost {
 	struct mgmt_addr_info addr;
 } __packed;
 
+#define MGMT_EV_MESH_DEVICE_FOUND		0x0031
+struct mgmt_ev_mesh_device_found {
+	struct mgmt_addr_info addr;
+	int8_t rssi;
+	uint32_t flags;
+	uint64_t instant;
+	uint16_t eir_len;
+	uint8_t eir[];
+} __packed;
+
+#define MGMT_EV_MESH_PACKET_COMPLETE		0x0032
+struct mgmt_ev_mesh_pkt_cmplt {
+	uint8_t handle;
+} __packed;
+
 static const char *mgmt_op[] = {
 	"<0x0000>",
 	"Read Version",
@@ -1172,6 +1194,8 @@ static const char *mgmt_ev[] = {
 	"Controller Resume",
 	"Advertisement Monitor Device Found",		/* 0x002f */
 	"Advertisement Monitor Device Lost",
+	"Mesh Packet Found",
+	"Mesh Packet Complete",
 };
 
 static const char *mgmt_status[] = {

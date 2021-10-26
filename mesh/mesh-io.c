@@ -26,7 +26,7 @@
 
 /* List of Supported Mesh-IO Types */
 static const struct mesh_io_table table[] = {
-	{MESH_IO_TYPE_GENERIC,	&mesh_io_mgmt}
+	{MESH_IO_TYPE_GENERIC,	&mesh_io_mgmt},
 	{MESH_IO_TYPE_UNIT_TEST, &mesh_io_unit},
 };
 
