@@ -594,24 +594,39 @@ static void adv_set(uint8_t status, uint16_t length,
 				adv_set, L_UINT_TO_PTR(index), NULL);
 }
 
+static void mesh_up(uint8_t status, uint16_t length,
+					const void *param, void *user_data)
+{
+	int index = L_PTR_TO_UINT(user_data);
+
+	l_debug("HCI%d Mesh up status: %d", index, status);
+}
+
 static void le_up(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	int index = L_PTR_TO_UINT(user_data);
 
 	l_debug("HCI%d LE up status: %d", index, status);
+
 }
 
 static void ctl_up(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	int index = L_PTR_TO_UINT(user_data);
+	unsigned char mesh[] = { 0x01 , 0x00, MESH_AD_TYPE_NETWORK,
+		MESH_AD_TYPE_BEACON, MESH_AD_TYPE_PROVISION };
 
 	l_debug("HCI%d is up status: %d", index, status);
 	if (status)
 		return;
 
 	pvt->controllers |= 1 << index;
+
+	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH, index,
+			sizeof(mesh), &mesh,
+			mesh_up, L_UINT_TO_PTR(index), NULL);
 
 	if (pvt->send_idx == MGMT_INDEX_NONE) {
 		if (pvt && pvt->ready_callback) {
@@ -624,7 +639,7 @@ static void ctl_up(uint8_t status, uint16_t length,
 static void read_info_cb(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
-	unsigned char le[] = { 0x02 };
+	unsigned char le[] = { 0x01 };
 	int index = L_PTR_TO_UINT(user_data);
 	const struct mgmt_rp_read_info *rp = param;
 	uint32_t current_settings, supported_settings;
