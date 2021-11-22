@@ -167,11 +167,9 @@ static bool filter_dups(const uint8_t *addr, const uint8_t *adv,
 	if (instant_delta >= DUP_FILTER_TIME || data != filter->data) {
 		filter->instant = instant;
 		filter->data = data;
-		//l_debug("pass - %lx", data);
 		return false;
 	}
 
-	//l_debug("filter - %lx", data);
 	return true;
 }
 
@@ -198,6 +196,7 @@ static void process_rx(struct mesh_io_private *pvt, int8_t rssi,
 		.info.rssi = rssi,
 	};
 
+	//print_packet("RX", data, len);
 	l_queue_foreach(pvt->rx_regs, process_rx_callbacks, &rx);
 }
 
@@ -223,6 +222,7 @@ static void event_device_found(uint16_t index, uint16_t length,
 	if (filter_dups(addr, adv, instant))
 		return;
 
+	//print_packet("ADV pkt", adv, adv_len);
 	while (len < adv_len - 1) {
 		uint8_t field_len = adv[0];
 
@@ -237,6 +237,7 @@ static void event_device_found(uint16_t index, uint16_t length,
 			break;
 
 		/* TODO: Create an Instant to use */
+		if (adv[1] >= 0x29 && adv[1] <= 0x2B)
 		process_rx(io->pvt, ev->rssi, instant, addr, adv + 1, adv[0]);
 
 		adv += field_len + 1;
@@ -396,50 +397,6 @@ static void configure_hci(struct bt_hci *hci)
 	bt_hci_send(hci, BT_HCI_CMD_LE_SET_SCAN_ENABLE, &cmd_se,
 				sizeof(cmd_se), hci_init_cb, hci, NULL);
 }
-
-#if 0
-static void scan_enable_rsp(const void *buf, uint8_t size,
-							void *user_data)
-{
-	uint8_t status = *((uint8_t *) buf);
-
-	if (status)
-		l_error("LE Scan enable failed (0x%02x)", status);
-}
-
-static void set_recv_scan_enable(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct mesh_io_private *pvt = user_data;
-	struct bt_hci_cmd_le_set_scan_enable cmd;
-
-	cmd.enable = 0x01;	/* Enable scanning */
-	cmd.filter_dup = 0x00;	/* Report duplicates */
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_SCAN_ENABLE,
-			&cmd, sizeof(cmd), scan_enable_rsp, pvt, NULL);
-}
-
-static void scan_disable_rsp(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct bt_hci_cmd_le_set_scan_parameters cmd;
-	struct mesh_io_private *pvt = user_data;
-	uint8_t status = *((uint8_t *) buf);
-
-	if (status)
-		l_error("LE Scan disable failed (0x%02x)", status);
-
-	cmd.type = pvt->active ? 0x01 : 0x00;	/* Passive/Active scanning */
-	cmd.interval = L_CPU_TO_LE16(0x0010);	/* 10 ms */
-	cmd.window = L_CPU_TO_LE16(0x0010);	/* 10 ms */
-	cmd.own_addr_type = 0x01;		/* ADDR_TYPE_RANDOM */
-	cmd.filter_policy = 0x00;		/* Accept all */
-
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_SCAN_PARAMETERS,
-			&cmd, sizeof(cmd),
-			set_recv_scan_enable, pvt, NULL);
-}
-#endif
 
 static bool simple_match(const void *a, const void *b)
 {
@@ -637,6 +594,7 @@ static void ctl_up(uint8_t status, uint16_t length,
 
 	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH_RECEIVER, index, len, mesh,
 			mesh_up, L_UINT_TO_PTR(index), NULL);
+	l_debug("done %d mesh startup", index);
 
 	l_free(mesh);
 
@@ -715,6 +673,9 @@ static void read_info_cb(uint8_t status, uint16_t length,
 	} else {
 		char disco[] = { 6 };
 
+	unsigned char mesh[] = { 0x01 , 0x00, MESH_AD_TYPE_NETWORK,
+		MESH_AD_TYPE_BEACON, MESH_AD_TYPE_PROVISION };
+
 		l_info("Controller hci %u already in use (%x)",
 						index, current_settings);
 
@@ -722,6 +683,11 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
 				sizeof(le), &le,
 				ctl_up, L_UINT_TO_PTR(index), NULL);
+
+	l_info("Try Again");
+	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH, index,
+			sizeof(mesh), &mesh,
+			mesh_up, L_UINT_TO_PTR(index), NULL);
 
 		mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
 				sizeof(disco), disco, disco_cb, NULL, NULL);
@@ -745,21 +711,6 @@ static void index_removed(uint16_t index, uint16_t length, const void *param,
 	if (pvt && pvt->send_idx == index)
 		pvt->send_idx = MGMT_INDEX_NONE;
 
-#if 0
-	if (pvt)
-		pvt->controllers &= ~(1 << index);
-
-	if (pvt && pvt->send_idx == index) {
-		bt_hci_unref(pvt->hci);
-		pvt->hci = NULL;
-		pvt->send_idx = MGMT_INDEX_NONE;
-
-		if (pvt->controllers)
-			mgmt_send(pvt->mgmt, MGMT_OP_READ_INDEX_LIST,
-					MGMT_INDEX_NONE, 0, NULL,
-					read_index_list_cb, NULL, NULL);
-	}
-#endif
 }
 
 static void read_index_list_cb(uint8_t status, uint16_t length,
@@ -843,8 +794,6 @@ static bool dev_init(struct mesh_io *io, void *opts,
 	pvt->user_data = user_data;
 	io->pvt = pvt;
 
-	//l_idle_oneshot(mgmt_init, io, NULL);
-
 	return true;
 }
 
@@ -914,27 +863,6 @@ static bool dev_caps(struct mesh_io *io, struct mesh_io_caps *caps)
 	return true;
 }
 
-#if 0
-static void send_cancel_done(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct mesh_io_private *pvt = user_data;
-	struct bt_hci_cmd_le_set_random_address cmd;
-
-	if (!pvt)
-		return;
-
-	pvt->sending = false;
-
-	/* At end of any burst of ADVs, change random address */
-	/* TODO:  Add MGMT command to set Random Address */
-	l_getrandom(cmd.addr, 6);
-	cmd.addr[5] |= 0xc0;
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_RANDOM_ADDRESS,
-				&cmd, sizeof(cmd), NULL, NULL, NULL);
-}
-#endif
-
 static void send_cancel(struct mesh_io_private *pvt)
 {
 	struct mgmt_cp_remove_advertising remove;
@@ -958,80 +886,6 @@ static void send_cancel(struct mesh_io_private *pvt)
 
 	/* TODO:  Add MGMT command to set Random Address */
 }
-
-#if 0
-static void set_send_adv_enable(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct mesh_io_private *pvt = user_data;
-	struct bt_hci_cmd_le_set_adv_enable cmd;
-
-	if (!pvt)
-		return;
-
-	pvt->sending = true;
-	cmd.enable = 0x01;	/* Enable advertising */
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_ADV_ENABLE,
-				&cmd, sizeof(cmd), NULL, NULL, NULL);
-}
-
-static void set_send_adv_data(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct mesh_io_private *pvt = user_data;
-	struct tx_pkt *tx;
-	struct bt_hci_cmd_le_set_adv_data cmd;
-
-	if (!pvt || !pvt->tx)
-		return;
-
-	tx = pvt->tx;
-	if (tx->len >= sizeof(cmd.data))
-		goto done;
-
-	memset(&cmd, 0, sizeof(cmd));
-
-	cmd.len = tx->len + 1;
-	cmd.data[0] = tx->len;
-	memcpy(cmd.data + 1, tx->pkt, tx->len);
-
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_ADV_DATA,
-					&cmd, sizeof(cmd),
-					set_send_adv_enable, pvt, NULL);
-done:
-	if (tx->delete) {
-		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
-		l_free(tx);
-	}
-
-	pvt->tx = NULL;
-}
-
-static void set_send_adv_params(const void *buf, uint8_t size,
-							void *user_data)
-{
-	struct mesh_io_private *pvt = user_data;
-	struct bt_hci_cmd_le_set_adv_parameters cmd;
-	uint16_t hci_interval;
-
-	if (!pvt)
-		return;
-
-	hci_interval = (pvt->interval * 16) / 10;
-	cmd.min_interval = L_CPU_TO_LE16(hci_interval);
-	cmd.max_interval = L_CPU_TO_LE16(hci_interval);
-	cmd.type = 0x03; /* ADV_NONCONN_IND */
-	cmd.own_addr_type = 0x01; /* ADDR_TYPE_RANDOM */
-	cmd.direct_addr_type = 0x00;
-	memset(cmd.direct_addr, 0, 6);
-	cmd.channel_map = 0x07;
-	cmd.filter_policy = 0x03;
-
-	bt_hci_send(pvt->hci, BT_HCI_CMD_LE_SET_ADV_PARAMETERS,
-				&cmd, sizeof(cmd),
-				set_send_adv_data, pvt, NULL);
-}
-#endif
 
 static void next_instance(struct mesh_io_private *pvt)
 {
@@ -1064,12 +918,33 @@ static void adv_halt(uint8_t status, uint16_t length,
 	print_packet("Halt params", param, length);
 }
 
+static void tx_to(struct l_timeout *timeout, void *user_data);
+static void send_cmplt(uint8_t status, uint16_t length,
+					const void *param, void *user_data)
+{
+	struct tx_pkt *tx = user_data;
+
+	if (status)
+		l_debug("Mesh Send Failed: %d", status);
+	else
+		print_packet("Mesh Send Complete", tx->pkt, tx->len);
+
+	if (tx->delete) {
+		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
+		l_free(tx);
+		pvt->tx = NULL;
+	}
+
+	tx_to(pvt->tx_timeout, pvt);
+}
+
 static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 							uint16_t interval)
 {
 	//struct mgmt_cp_set_static_address set_addr;
 	struct mgmt_cp_remove_advertising remove;
 	struct mgmt_cp_add_advertising *add;
+	struct mgmt_cp_mesh_send *send;
 	char advertisable[] = { 1 };
 	uint8_t instance;
 	uint16_t index;
@@ -1081,6 +956,20 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 	instance = pvt->instance;
 	index = pvt->send_idx;
 
+	len = sizeof(struct mgmt_cp_mesh_send) + tx->len;
+	send = l_malloc(len);
+	send->instant = 0;
+	send->delay = 0;
+	send->cnt = 1;
+	memcpy(send->data, tx->pkt, tx->len);
+	mgmt_send(pvt->mgmt, MGMT_OP_MESH_SEND, index,
+			len, send, send_cmplt, tx, NULL);
+	print_packet("Mesh Send Start", tx->pkt, tx->len);
+	l_free(send);
+	pvt->tx = tx;
+	return;
+
+
 	if (instance) {
 		char adv_off[] = { 0 };
 		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
@@ -1088,7 +977,6 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 				adv_halt, L_UINT_TO_PTR(index), NULL);
 
 		remove.instance = instance;
-		//if (0)
 		mgmt_send(pvt->mgmt, MGMT_OP_REMOVE_ADVERTISING, index,
 						sizeof(remove), &remove,
 						NULL, NULL, NULL);
@@ -1122,6 +1010,7 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 	add->adv_data_len = tx->len + 1;
 	add->data[0] = tx->len;
 	memcpy(add->data + 1, tx->pkt, tx->len);
+	print_packet("MGMT-Adv", tx->pkt, tx->len);
 	mgmt_send(pvt->mgmt, MGMT_OP_ADD_ADVERTISING, index, len, add,
 							add_adv_cb, NULL, NULL);
 	l_free(add);
@@ -1133,6 +1022,7 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 	if (tx->delete) {
 		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
 		l_free(tx);
+		pvt->tx = NULL;
 	}
 }
 
@@ -1255,7 +1145,6 @@ static bool send_tx(struct mesh_io *io, struct mesh_io_send_info *info,
 	memcpy(&tx->pkt, data, len);
 	tx->len = len;
 
-	l_debug("q: %p tx: %p", pvt->tx_pkts, tx);
 	if (info->type == MESH_IO_TIMING_TYPE_POLL_RSP)
 		l_queue_push_head(pvt->tx_pkts, tx);
 	else {
@@ -1359,6 +1248,7 @@ static bool recv_register(struct mesh_io *io, const uint8_t *filter,
 	rx_reg->len = len;
 	rx_reg->cb = cb;
 	rx_reg->user_data = user_data;
+	rx_reg->seen = l_queue_new();
 
 	l_queue_push_head(pvt->rx_regs, rx_reg);
 
