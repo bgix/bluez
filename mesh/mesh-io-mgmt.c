@@ -615,8 +615,10 @@ static void ctl_up(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	int index = L_PTR_TO_UINT(user_data);
-	unsigned char mesh[] = { 0x01 , 0x00, MESH_AD_TYPE_NETWORK,
-		MESH_AD_TYPE_BEACON, MESH_AD_TYPE_PROVISION };
+	uint16_t len;
+	struct mgmt_cp_set_mesh *mesh;
+	uint8_t mesh_ad_types[] = { MESH_AD_TYPE_NETWORK,
+				MESH_AD_TYPE_BEACON, MESH_AD_TYPE_PROVISION };
 
 	l_debug("HCI%d is up status: %d", index, status);
 	if (status)
@@ -624,9 +626,19 @@ static void ctl_up(uint8_t status, uint16_t length,
 
 	pvt->controllers |= 1 << index;
 
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH, index,
-			sizeof(mesh), &mesh,
+	len = sizeof(struct mgmt_cp_set_mesh) + sizeof(mesh_ad_types);
+	mesh = l_malloc(len);
+
+	mesh->enable = 1;
+	mesh->window = L_CPU_TO_LE16(0x1000);
+	mesh->period = L_CPU_TO_LE16(0x1000);
+	mesh->num_ad_types = sizeof(mesh_ad_types);
+	memcpy(mesh->ad_types, mesh_ad_types, sizeof(mesh_ad_types));
+
+	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH_RECEIVER, index, len, mesh,
 			mesh_up, L_UINT_TO_PTR(index), NULL);
+
+	l_free(mesh);
 
 	if (pvt->send_idx == MGMT_INDEX_NONE) {
 		if (pvt && pvt->ready_callback) {

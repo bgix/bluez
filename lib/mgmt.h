@@ -757,12 +757,29 @@ struct mgmt_cp_add_adv_patterns_monitor_rssi {
 	struct mgmt_adv_pattern patterns[0];
 } __packed;
 
-#define MGMT_OP_SET_MESH		0x0057
+#define MGMT_OP_SET_MESH_RECEIVER	0x0057
 struct mgmt_cp_set_mesh {
 	uint8_t   enable;
-	uint8_t   active;
+	uint16_t  window;
+	uint16_t  period;
+	uint8_t   num_ad_types;
 	uint8_t   ad_types[];
 } __packed;
+
+#define MGMT_OP_MESH_SEND		0x0059
+struct mgmt_cp_mesh_send {
+	struct mgmt_addr_info addr;
+	uint64_t  instant;
+	uint16_t  delay;
+	uint8_t   cnt;
+	uint8_t   data[];
+} __packed;
+
+#define MGMT_OP_MESH_SEND_CANCEL	0x005A
+struct mgmt_cp_mesh_send_cancel {
+	uint8_t  handle;
+} __packed;
+
 
 #define MGMT_EV_CMD_COMPLETE		0x0001
 struct mgmt_ev_cmd_complete {
