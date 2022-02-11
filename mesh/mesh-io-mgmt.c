@@ -200,6 +200,12 @@ static void process_rx(struct mesh_io_private *pvt, int8_t rssi,
 	l_queue_foreach(pvt->rx_regs, process_rx_callbacks, &rx);
 }
 
+static void send_cmplt(uint16_t index, uint16_t length,
+					const void *param, void *user_data)
+{
+	print_packet("Mesh Send Complete", param, length);
+}
+
 static void event_device_found(uint16_t index, uint16_t length,
 					const void *param, void *user_data)
 {
@@ -467,25 +473,6 @@ static void hci_init(uint16_t index)
 		pvt->ready_callback(pvt->user_data, result);
 }
 
-#if 0
-#define MGMT_OP_READ_ADV_MONITOR_FEATURES	0x0051
-struct mgmt_rp_read_adv_monitor_features {
-	uint32_t supported_features;
-	uint32_t enabled_features;
-	uint16_t max_num_handles;
-	uint8_t max_num_patterns;
-	uint16_t num_handles;
-	uint16_t handles[0];
-}  __packed;
-
-#define MGMT_OP_START_DISCOVERY		0x0023
-struct mgmt_cp_start_discovery {
-	uint8_t type;
-} __packed;
-
-
-#endif
-
 static void disco_cb(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
@@ -504,6 +491,8 @@ static void mon_feat(uint8_t status, uint16_t length,
 	l_debug("Mon Feat Status hci%d: %d", index, status);
 	print_packet("Monitor Features", param, length);
 
+	mgmt_send(pvt->mgmt, MGMT_OP_STOP_DISCOVERY, index,
+				sizeof(disco), disco, disco_cb, NULL, NULL);
 	mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
 				sizeof(disco), disco, disco_cb, NULL, NULL);
 }
@@ -565,7 +554,6 @@ static void le_up(uint8_t status, uint16_t length,
 	int index = L_PTR_TO_UINT(user_data);
 
 	l_debug("HCI%d LE up status: %d", index, status);
-
 }
 
 static void ctl_up(uint8_t status, uint16_t length,
@@ -673,9 +661,6 @@ static void read_info_cb(uint8_t status, uint16_t length,
 	} else {
 		char disco[] = { 6 };
 
-	unsigned char mesh[] = { 0x01 , 0x00, MESH_AD_TYPE_NETWORK,
-		MESH_AD_TYPE_BEACON, MESH_AD_TYPE_PROVISION };
-
 		l_info("Controller hci %u already in use (%x)",
 						index, current_settings);
 
@@ -683,11 +668,6 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
 				sizeof(le), &le,
 				ctl_up, L_UINT_TO_PTR(index), NULL);
-
-	l_info("Try Again");
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH, index,
-			sizeof(mesh), &mesh,
-			mesh_up, L_UINT_TO_PTR(index), NULL);
 
 		mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
 				sizeof(disco), disco, disco_cb, NULL, NULL);
@@ -785,6 +765,8 @@ static bool dev_init(struct mesh_io *io, void *opts,
 						index_removed, io, NULL);
 	mgmt_register(pvt->mgmt, MGMT_EV_DEVICE_FOUND, MGMT_INDEX_NONE,
 						event_device_found, io, NULL);
+	mgmt_register(pvt->mgmt, MGMT_EV_MESH_PACKET_CMPLT, MGMT_INDEX_NONE,
+						send_cmplt, io, NULL);
 
 	pvt->dup_filters = l_queue_new();
 	pvt->rx_regs = l_queue_new();
@@ -809,6 +791,17 @@ static void ctl_dn(uint8_t status, uint16_t length,
 		pvt = NULL;
 	}
 }
+
+static void free_rx_reg(void *user_data)
+{
+	struct pvt_rx_reg *rx_reg = user_data;
+
+	if (rx_reg)
+		l_queue_destroy(rx_reg->seen, l_free);
+
+	l_free(rx_reg);
+}
+
 
 static bool dev_destroy(struct mesh_io *io)
 {
@@ -838,7 +831,7 @@ static bool dev_destroy(struct mesh_io *io)
 	bt_hci_unref(pvt->hci);
 	l_timeout_remove(pvt->tx_timeout);
 	l_queue_destroy(pvt->dup_filters, l_free);
-	l_queue_destroy(pvt->rx_regs, l_free);
+	l_queue_destroy(pvt->rx_regs, free_rx_reg);
 	l_queue_destroy(pvt->tx_pkts, l_free);
 	io->pvt = NULL;
 	if (!pd) {
@@ -897,13 +890,6 @@ static void next_instance(struct mesh_io_private *pvt)
 		//pvt->instance++;
 }
 
-#if 0
-#define MGMT_OP_SET_STATIC_ADDRESS	0x002B
-struct mgmt_cp_set_static_address {
-	bdaddr_t bdaddr;
-} __packed;
-#endif
-
 static void add_adv_cb(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
@@ -919,15 +905,13 @@ static void adv_halt(uint8_t status, uint16_t length,
 }
 
 static void tx_to(struct l_timeout *timeout, void *user_data);
-static void send_cmplt(uint8_t status, uint16_t length,
+static void send_queued(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	struct tx_pkt *tx = user_data;
 
 	if (status)
 		l_debug("Mesh Send Failed: %d", status);
-	else
-		print_packet("Mesh Send Complete", tx->pkt, tx->len);
 
 	if (tx->delete) {
 		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
@@ -941,7 +925,6 @@ static void send_cmplt(uint8_t status, uint16_t length,
 static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 							uint16_t interval)
 {
-	//struct mgmt_cp_set_static_address set_addr;
 	struct mgmt_cp_remove_advertising remove;
 	struct mgmt_cp_add_advertising *add;
 	struct mgmt_cp_mesh_send *send;
@@ -958,12 +941,14 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 
 	len = sizeof(struct mgmt_cp_mesh_send) + tx->len;
 	send = l_malloc(len);
+	memset(send, 0, len);
+	send->addr.type = BDADDR_LE_RANDOM;
 	send->instant = 0;
 	send->delay = 0;
 	send->cnt = 1;
 	memcpy(send->data, tx->pkt, tx->len);
 	mgmt_send(pvt->mgmt, MGMT_OP_MESH_SEND, index,
-			len, send, send_cmplt, tx, NULL);
+			len, send, send_queued, tx, NULL);
 	print_packet("Mesh Send Start", tx->pkt, tx->len);
 	l_free(send);
 	pvt->tx = tx;
@@ -981,12 +966,6 @@ static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 						sizeof(remove), &remove,
 						NULL, NULL, NULL);
 
-#if 0
-		l_getrandom(&set_addr, sizeof(set_addr));
-		set_addr.bdaddr.b[5] |= 0xc0;
-		mgmt_send(pvt->mgmt, MGMT_OP_SET_STATIC_ADDRESS, index,
-				sizeof(set_addr), &set_addr, NULL, NULL, NULL);
-#endif
 	} else
 		l_debug("Adv-Idle");
 
@@ -1217,22 +1196,9 @@ static bool find_by_filter(const void *a, const void *b)
 	return !memcmp(rx_reg->filter, filter, rx_reg->len);
 }
 
-static void free_rx_reg(void *user_data)
-{
-	struct pvt_rx_reg *rx_reg = user_data;
-
-	if (rx_reg) {
-		l_queue_destroy(rx_reg->seen, l_free);
-		//l_timout_cancel(rx_reg->flush_to);
-	}
-
-	l_free(rx_reg);
-}
-
 static bool recv_register(struct mesh_io *io, const uint8_t *filter,
 			uint8_t len, mesh_io_recv_func_t cb, void *user_data)
 {
-	//struct bt_hci_cmd_le_set_scan_enable cmd;
 	struct pvt_rx_reg *rx_reg;
 	bool active = false;
 

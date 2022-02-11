@@ -1066,7 +1066,7 @@ struct mgmt_ev_mesh_device_found {
 	uint8_t eir[];
 } __packed;
 
-#define MGMT_EV_MESH_PACKET_COMPLETE		0x0032
+#define MGMT_EV_MESH_PACKET_CMPLT		0x0032
 struct mgmt_ev_mesh_pkt_cmplt {
 	uint8_t handle;
 } __packed;
