@@ -209,7 +209,7 @@ static void send_cmplt(uint16_t index, uint16_t length,
 static void event_device_found(uint16_t index, uint16_t length,
 					const void *param, void *user_data)
 {
-	const struct mgmt_ev_device_found *ev = param;
+	const struct mgmt_ev_mesh_device_found *ev = param;
 	struct mesh_io *io = user_data;
 	const uint8_t *adv;
 	const uint8_t *addr;
@@ -473,28 +473,13 @@ static void hci_init(uint16_t index)
 		pvt->ready_callback(pvt->user_data, result);
 }
 
-static void disco_cb(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	int index = L_PTR_TO_UINT(user_data);
-
-	l_debug("Disco Status hci%d: %d", index, status);
-	print_packet("Disco params", param, length);
-}
-
 static void mon_feat(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
 	int index = L_PTR_TO_UINT(user_data);
-	char disco[] = { 6 };
 
 	l_debug("Mon Feat Status hci%d: %d", index, status);
 	print_packet("Monitor Features", param, length);
-
-	mgmt_send(pvt->mgmt, MGMT_OP_STOP_DISCOVERY, index,
-				sizeof(disco), disco, disco_cb, NULL, NULL);
-	mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
-				sizeof(disco), disco, disco_cb, NULL, NULL);
 }
 
 static void adv_unset(uint8_t status, uint16_t length,
@@ -659,7 +644,6 @@ static void read_info_cb(uint8_t status, uint16_t length,
 
 		}
 	} else {
-		char disco[] = { 6 };
 
 		l_info("Controller hci %u already in use (%x)",
 						index, current_settings);
@@ -668,9 +652,6 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
 				sizeof(le), &le,
 				ctl_up, L_UINT_TO_PTR(index), NULL);
-
-		mgmt_send(pvt->mgmt, MGMT_OP_START_DISCOVERY, index,
-				sizeof(disco), disco, disco_cb, NULL, NULL);
 
 	}
 }
@@ -763,7 +744,7 @@ static bool dev_init(struct mesh_io *io, void *opts,
 						index_added, io, NULL);
 	mgmt_register(pvt->mgmt, MGMT_EV_INDEX_REMOVED, MGMT_INDEX_NONE,
 						index_removed, io, NULL);
-	mgmt_register(pvt->mgmt, MGMT_EV_DEVICE_FOUND, MGMT_INDEX_NONE,
+	mgmt_register(pvt->mgmt, MGMT_EV_MESH_DEVICE_FOUND, MGMT_INDEX_NONE,
 						event_device_found, io, NULL);
 	mgmt_register(pvt->mgmt, MGMT_EV_MESH_PACKET_CMPLT, MGMT_INDEX_NONE,
 						send_cmplt, io, NULL);
