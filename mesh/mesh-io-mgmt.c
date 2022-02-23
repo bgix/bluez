@@ -20,7 +20,6 @@
 
 #include "monitor/bt.h"
 #include "lib/bluetooth.h"
-#include "src/shared/hci.h"
 #include "lib/bluetooth.h"
 #include "lib/mgmt.h"
 #include "src/shared/mgmt.h"
@@ -33,27 +32,24 @@
 #include "mesh/mesh-io-generic.h"
 
 struct mesh_io_private {
-	struct bt_hci *hci;
-	struct mgmt *mgmt;
+	struct mesh_io *io;
 	void *user_data;
-	mesh_io_ready_func_t ready_callback;
 	struct l_timeout *tx_timeout;
 	struct l_queue *dup_filters;
 	struct l_queue *rx_regs;
 	struct l_queue *tx_pkts;
 	struct tx_pkt *tx;
-	uint32_t controllers;
+	unsigned int tx_id;
+	unsigned int rx_id;
 	uint16_t send_idx;
 	uint16_t interval;
-	uint8_t instance;
+	uint8_t handle;
 	bool sending;
 	bool active;
-	bool multicontroller;
 };
 
 struct pvt_rx_reg {
 	mesh_io_recv_func_t cb;
-	struct l_queue *seen;
 	void *user_data;
 	uint8_t len;
 	uint8_t filter[0];
@@ -87,9 +83,6 @@ struct dup_filter {
 } __packed;
 
 static struct mesh_io_private *pvt;
-
-static void read_index_list_cb(uint8_t status, uint16_t length,
-					const void *param, void *user_data);
 
 static uint32_t get_instant(void)
 {
@@ -196,7 +189,7 @@ static void process_rx(struct mesh_io_private *pvt, int8_t rssi,
 		.info.rssi = rssi,
 	};
 
-	//print_packet("RX", data, len);
+	print_packet("RX", data, len);
 	l_queue_foreach(pvt->rx_regs, process_rx_callbacks, &rx);
 }
 
@@ -250,160 +243,6 @@ static void event_device_found(uint16_t index, uint16_t length,
 	}
 }
 
-static void close_hci(void *hci)
-{
-	bt_hci_unref(hci);
-}
-
-static void hci_init_cb(const void *data, uint8_t size, void *user_data)
-{
-	struct bt_hci *hci = user_data;
-	uint8_t status = l_get_u8(data);
-
-	if (status)
-		l_error("Failed to initialize HCI (0x%2.2x)", status);
-
-	if (pvt && pvt->ready_callback) {
-		pvt->ready_callback(pvt->user_data, !status);
-		pvt->ready_callback = NULL;
-	}
-
-	/* We no longer need user channel when using MGMT */
-	if (!pvt || pvt->hci != hci)
-		l_idle_oneshot(close_hci, hci, NULL);
-}
-
-static void local_commands_callback(const void *data, uint8_t size,
-							void *user_data)
-{
-	const struct bt_hci_rsp_read_local_commands *rsp = data;
-
-	if (rsp->status) {
-		l_error("Failed to read local commands");
-		hci_init_cb(data, size, user_data);
-	}
-}
-
-static void local_features_callback(const void *data, uint8_t size,
-							void *user_data)
-{
-	const struct bt_hci_rsp_read_local_features *rsp = data;
-
-	if (rsp->status) {
-		l_error("Failed to read local features");
-		hci_init_cb(data, size, user_data);
-	}
-}
-
-static void hci_generic_callback(const void *data, uint8_t size,
-								void *user_data)
-{
-	uint8_t status = l_get_u8(data);
-
-	if (status)
-		hci_init_cb(data, size, user_data);
-}
-
-static void configure_hci(struct bt_hci *hci)
-{
-	struct bt_hci_cmd_le_set_scan_parameters cmd_sp;
-	struct bt_hci_cmd_set_event_mask cmd_sem;
-	struct bt_hci_cmd_le_set_event_mask cmd_slem;
-	struct bt_hci_cmd_le_set_random_address cmd_raddr;
-	struct bt_hci_cmd_le_set_scan_enable cmd_se;
-
-	/* Set scan parameters */
-	cmd_sp.type = 0x00; /* Passive Scanning */
-	cmd_sp.interval = L_CPU_TO_LE16(0x0010);	/* 10 ms */
-	cmd_sp.window = L_CPU_TO_LE16(0x0010);	/* 10 ms */
-	cmd_sp.own_addr_type = 0x01; /* Public Device Address */
-	/* Accept all advertising packets except directed advertising packets
-	 * not addressed to this device (default).
-	 */
-	cmd_sp.filter_policy = 0x00;
-
-	/* Scan Enable parameters */
-	cmd_se.enable = 0x01;	/* Enable scanning */
-	cmd_se.filter_dup = 0x00;	/* Report duplicates */
-
-	/* Set event mask
-	 *
-	 * Mask: 0x2000800002008890
-	 *   Disconnection Complete
-	 *   Encryption Change
-	 *   Read Remote Version Information Complete
-	 *   Hardware Error
-	 *   Data Buffer Overflow
-	 *   Encryption Key Refresh Complete
-	 *   LE Meta
-	 */
-	cmd_sem.mask[0] = 0x90;
-	cmd_sem.mask[1] = 0x88;
-	cmd_sem.mask[2] = 0x00;
-	cmd_sem.mask[3] = 0x02;
-	cmd_sem.mask[4] = 0x00;
-	cmd_sem.mask[5] = 0x80;
-	cmd_sem.mask[6] = 0x00;
-	cmd_sem.mask[7] = 0x20;
-
-	/* Set LE event mask
-	 *
-	 * Mask: 0x000000000000087f
-	 *   LE Connection Complete
-	 *   LE Advertising Report
-	 *   LE Connection Update Complete
-	 *   LE Read Remote Used Features Complete
-	 *   LE Long Term Key Request
-	 *   LE Remote Connection Parameter Request
-	 *   LE Data Length Change
-	 *   LE PHY Update Complete
-	 */
-	cmd_slem.mask[0] = 0x7f;
-	cmd_slem.mask[1] = 0x08;
-	cmd_slem.mask[2] = 0x00;
-	cmd_slem.mask[3] = 0x00;
-	cmd_slem.mask[4] = 0x00;
-	cmd_slem.mask[5] = 0x00;
-	cmd_slem.mask[6] = 0x00;
-	cmd_slem.mask[7] = 0x00;
-
-	/* Set LE random address */
-	l_getrandom(cmd_raddr.addr, 6);
-	cmd_raddr.addr[5] |= 0xc0;
-
-	/* Reset Command */
-	bt_hci_send(hci, BT_HCI_CMD_RESET, NULL, 0, hci_generic_callback,
-								hci, NULL);
-
-	/* Read local supported commands */
-	bt_hci_send(hci, BT_HCI_CMD_READ_LOCAL_COMMANDS, NULL, 0,
-					local_commands_callback, hci, NULL);
-
-	/* Read local supported features */
-	bt_hci_send(hci, BT_HCI_CMD_READ_LOCAL_FEATURES, NULL, 0,
-					local_features_callback, hci, NULL);
-
-	/* Set event mask */
-	bt_hci_send(hci, BT_HCI_CMD_SET_EVENT_MASK, &cmd_sem,
-			sizeof(cmd_sem), hci_generic_callback, hci, NULL);
-
-	/* Set LE event mask */
-	bt_hci_send(hci, BT_HCI_CMD_LE_SET_EVENT_MASK, &cmd_slem,
-			sizeof(cmd_slem), hci_generic_callback, hci, NULL);
-
-	/* Set LE random address */
-	bt_hci_send(hci, BT_HCI_CMD_LE_SET_RANDOM_ADDRESS, &cmd_raddr,
-			sizeof(cmd_raddr), hci_generic_callback, hci, NULL);
-
-	/* Scan Params */
-	bt_hci_send(hci, BT_HCI_CMD_LE_SET_SCAN_PARAMETERS, &cmd_sp,
-			sizeof(cmd_sp), hci_generic_callback, hci, NULL);
-
-	/* Scan Enable */
-	bt_hci_send(hci, BT_HCI_CMD_LE_SET_SCAN_ENABLE, &cmd_se,
-				sizeof(cmd_se), hci_init_cb, hci, NULL);
-}
-
 static bool simple_match(const void *a, const void *b)
 {
 	return a == b;
@@ -442,89 +281,6 @@ static bool find_active(const void *a, const void *b)
 	return false;
 }
 
-static void hci_init(uint16_t index)
-{
-	struct bt_hci *hci;
-	bool result = true;
-
-	if (!pvt)
-		return;
-
-	hci = bt_hci_new_user_channel(index);
-	if (!hci) {
-		l_error("Failed to start mesh io (hci %u): %s", index,
-							strerror(errno));
-		result = false;
-	}
-
-	if (result) {
-		if (!pvt->hci) {
-			pvt->send_idx = index;
-			pvt->hci = hci;
-		}
-
-		configure_hci(hci);
-
-		l_debug("Started controller hci%u", index);
-
-	}
-
-	if (!result && pvt->ready_callback)
-		pvt->ready_callback(pvt->user_data, result);
-}
-
-static void mon_feat(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	int index = L_PTR_TO_UINT(user_data);
-
-	l_debug("Mon Feat Status hci%d: %d", index, status);
-	print_packet("Monitor Features", param, length);
-}
-
-static void adv_unset(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	int index = L_PTR_TO_UINT(user_data);
-
-	l_debug("Adv Set Status hci%d: %d", index, status);
-	print_packet("Adv Params", param, length);
-
-        if (status == MGMT_STATUS_SUCCESS) {
-		pvt->send_idx = index;
-		mgmt_send(pvt->mgmt, MGMT_OP_READ_ADV_MONITOR_FEATURES, index,
-			0, NULL, mon_feat, L_UINT_TO_PTR(index), NULL);
-	}
-}
-
-static void con_set(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	int index = L_PTR_TO_UINT(user_data);
-	char advertisable[] = { 0 };
-
-	l_debug("Con Set Status hci%d: %d", index, status);
-	print_packet("Con Params", param, length);
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
-				sizeof(advertisable), advertisable,
-				adv_unset, L_UINT_TO_PTR(index), NULL);
-}
-
-static void adv_set(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	int index = L_PTR_TO_UINT(user_data);
-	char advertisable[] = { 1 };
-
-	l_debug("Adv Set Status hci%d: %d", index, status);
-	print_packet("Adv Params", param, length);
-
-        if (status == MGMT_STATUS_BUSY)
-		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
-				sizeof(advertisable), advertisable,
-				adv_set, L_UINT_TO_PTR(index), NULL);
-}
-
 static void mesh_up(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
@@ -554,8 +310,6 @@ static void ctl_up(uint8_t status, uint16_t length,
 	if (status)
 		return;
 
-	pvt->controllers |= 1 << index;
-
 	len = sizeof(struct mgmt_cp_set_mesh) + sizeof(mesh_ad_types);
 	mesh = l_malloc(len);
 
@@ -565,16 +319,17 @@ static void ctl_up(uint8_t status, uint16_t length,
 	mesh->num_ad_types = sizeof(mesh_ad_types);
 	memcpy(mesh->ad_types, mesh_ad_types, sizeof(mesh_ad_types));
 
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_MESH_RECEIVER, index, len, mesh,
+	mesh_mgmt_send(MGMT_OP_SET_MESH_RECEIVER, index, len, mesh,
 			mesh_up, L_UINT_TO_PTR(index), NULL);
 	l_debug("done %d mesh startup", index);
 
 	l_free(mesh);
 
 	if (pvt->send_idx == MGMT_INDEX_NONE) {
-		if (pvt && pvt->ready_callback) {
-			pvt->ready_callback(pvt->user_data, true);
-			pvt->ready_callback = NULL;
+		pvt->send_idx = index;
+		if (pvt && pvt->io && pvt->io->ready) {
+			pvt->io->ready(pvt->io->user_data, true);
+			pvt->io->ready = NULL;
 		}
 	}
 }
@@ -591,11 +346,6 @@ static void read_info_cb(uint8_t status, uint16_t length,
 
 	if (!pvt)
 		return;
-
-	if (index > 31) {
-		l_debug("controllers > 31 not supported");
-		return;
-	}
 
 	if (status != MGMT_STATUS_SUCCESS) {
 		l_error("Failed to read info for hci index %u: %s (0x%02x)",
@@ -616,101 +366,33 @@ static void read_info_cb(uint8_t status, uint16_t length,
 		return;
 	}
 
-	l_debug("Existing Controllers: %x", pvt->controllers);
-	if (pvt->controllers & (1 << index))
-		return;
-
 	if (!(current_settings & MGMT_SETTING_POWERED)) {
-		char connectable[] = { 0 };
+		unsigned char power[] = { 0x01 };
 
 		/* TODO: Initialize this HCI controller */
 		l_info("Controller hci %u not in use", index);
-		if (0)
-			hci_init(index);
-		else {
-			unsigned char power[] = { 0x01 };
 
-			mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
-						sizeof(le), &le,
-					le_up, L_UINT_TO_PTR(index), NULL);
+		mesh_mgmt_send(MGMT_OP_SET_LE, index,
+				sizeof(le), &le,
+				le_up, L_UINT_TO_PTR(index), NULL);
 
-			mgmt_send(pvt->mgmt, MGMT_OP_SET_POWERED, index,
-					sizeof(power), &power,
-					ctl_up, L_UINT_TO_PTR(index), NULL);
-
-			mgmt_send(pvt->mgmt, MGMT_OP_SET_CONNECTABLE, index,
-				sizeof(connectable), connectable,
-				con_set, L_UINT_TO_PTR(index), NULL);
-
-		}
+		mesh_mgmt_send(MGMT_OP_SET_POWERED, index,
+				sizeof(power), &power,
+				ctl_up, L_UINT_TO_PTR(index), NULL);
 	} else {
 
 		l_info("Controller hci %u already in use (%x)",
 						index, current_settings);
 
 		/* Share this controller with bluetoothd */
-		mgmt_send(pvt->mgmt, MGMT_OP_SET_LE, index,
+		mesh_mgmt_send(MGMT_OP_SET_LE, index,
 				sizeof(le), &le,
 				ctl_up, L_UINT_TO_PTR(index), NULL);
 
 	}
 }
 
-static void index_added(uint16_t index, uint16_t length, const void *param,
-							void *user_data)
-{
-	l_debug("Found hci %u", index);
-	mgmt_send(pvt->mgmt, MGMT_OP_READ_INFO, index, 0, NULL,
-				read_info_cb, L_UINT_TO_PTR(index), NULL);
-}
-
-static void index_removed(uint16_t index, uint16_t length, const void *param,
-							void *user_data)
-{
-	l_debug("Hci dev %4.4x removed", index);
-
-	if (pvt && pvt->send_idx == index)
-		pvt->send_idx = MGMT_INDEX_NONE;
-
-}
-
-static void read_index_list_cb(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	const struct mgmt_rp_read_index_list *rp = param;
-	uint16_t num;
-	int i;
-
-	if (status != MGMT_STATUS_SUCCESS) {
-		l_error("Failed to read index list: %s (0x%02x)",
-						mgmt_errstr(status), status);
-		return;
-	}
-
-	if (length < sizeof(*rp)) {
-		l_error("Read index list response sixe too short");
-		return;
-	}
-
-	num = btohs(rp->num_controllers);
-
-	l_debug("Number of controllers: %u", num);
-
-	if (num * sizeof(uint16_t) + sizeof(*rp) != length) {
-		l_error("Incorrect packet size for index list response");
-		return;
-	}
-
-	for (i = 0; i < num; i++) {
-		uint16_t index;
-
-		index = btohs(rp->index[i]);
-		index_added(index, 0, NULL, user_data);
-	}
-}
-
-static bool dev_init(struct mesh_io *io, void *opts,
-				mesh_io_ready_func_t cb, void *user_data)
+static bool dev_init(struct mesh_io *io, void *opts, void *user_data)
 {
 	uint16_t index = *(int *)opts;
 
@@ -719,66 +401,29 @@ static bool dev_init(struct mesh_io *io, void *opts,
 
 	pvt = l_new(struct mesh_io_private, 1);
 
-	pvt->mgmt = mgmt_new_default();
 	pvt->send_idx = MGMT_INDEX_NONE;
 
-	if (!pvt->mgmt) {
-		l_free(pvt);
-		pvt = NULL;
-		return false;
-	}
+	mesh_mgmt_send(MGMT_OP_READ_INFO, index, 0, NULL,
+				read_info_cb, L_UINT_TO_PTR(index), NULL);
 
-	if (index <= 31)
-		pvt->controllers = 1 << index;
-	else
-		pvt->multicontroller = true;
-
-
-	l_debug("Register MGMT");
-	if (mgmt_send(pvt->mgmt, MGMT_OP_READ_INDEX_LIST,
-					MGMT_INDEX_NONE, 0, NULL,
-					read_index_list_cb, NULL, NULL) <= 0)
-		return false;
-
-	mgmt_register(pvt->mgmt, MGMT_EV_INDEX_ADDED, MGMT_INDEX_NONE,
-						index_added, io, NULL);
-	mgmt_register(pvt->mgmt, MGMT_EV_INDEX_REMOVED, MGMT_INDEX_NONE,
-						index_removed, io, NULL);
-	mgmt_register(pvt->mgmt, MGMT_EV_MESH_DEVICE_FOUND, MGMT_INDEX_NONE,
-						event_device_found, io, NULL);
-	mgmt_register(pvt->mgmt, MGMT_EV_MESH_PACKET_CMPLT, MGMT_INDEX_NONE,
-						send_cmplt, io, NULL);
+	pvt->rx_id = mesh_mgmt_register(MGMT_EV_MESH_DEVICE_FOUND,
+				MGMT_INDEX_NONE, event_device_found, io, NULL);
+	pvt->tx_id = mesh_mgmt_register(MGMT_EV_MESH_PACKET_CMPLT,
+					MGMT_INDEX_NONE, send_cmplt, io, NULL);
 
 	pvt->dup_filters = l_queue_new();
 	pvt->rx_regs = l_queue_new();
 	pvt->tx_pkts = l_queue_new();
 
-	pvt->ready_callback = cb;
-	pvt->user_data = user_data;
+	pvt->io = io;
 	io->pvt = pvt;
 
 	return true;
 }
 
-static void ctl_dn(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-
-	l_debug("Terminated Mesh IO");
-
-	if (pvt) {
-		mgmt_unref(pvt->mgmt);
-		l_free(pvt);
-		pvt = NULL;
-	}
-}
-
 static void free_rx_reg(void *user_data)
 {
 	struct pvt_rx_reg *rx_reg = user_data;
-
-	if (rx_reg)
-		l_queue_destroy(rx_reg->seen, l_free);
 
 	l_free(rx_reg);
 }
@@ -786,40 +431,23 @@ static void free_rx_reg(void *user_data)
 
 static bool dev_destroy(struct mesh_io *io)
 {
-	uint16_t index = 0;
-	uint32_t mask = pvt->controllers;
 	unsigned char param[] = { 0x00 };
-	bool pd = false;
 
 	if (io->pvt != pvt)
 		return true;
 
-	while (mask) {
-		if (mask == 1)
-			mgmt_send(pvt->mgmt, MGMT_OP_SET_POWERED, index,
-					sizeof(param), &param,
-					ctl_dn, NULL, NULL);
-		else if (mask & 1)
-			mgmt_send(pvt->mgmt, MGMT_OP_SET_POWERED, index,
-					sizeof(param), &param,
-					NULL, NULL, NULL);
+	mesh_mgmt_send(MGMT_OP_SET_POWERED, io->index, sizeof(param), &param,
+							NULL, NULL, NULL);
 
-		pd = true;
-		index++;
-		mask >>= 1;
-	}
-
-	bt_hci_unref(pvt->hci);
+	mesh_mgmt_unregister(pvt->rx_id);
+	mesh_mgmt_unregister(pvt->tx_id);
 	l_timeout_remove(pvt->tx_timeout);
 	l_queue_destroy(pvt->dup_filters, l_free);
 	l_queue_destroy(pvt->rx_regs, free_rx_reg);
 	l_queue_destroy(pvt->tx_pkts, l_free);
 	io->pvt = NULL;
-	if (!pd) {
-		mgmt_unref(pvt->mgmt);
-		l_free(pvt);
-		pvt = NULL;
-	}
+	l_free(pvt);
+	pvt = NULL;
 
 	return true;
 }
@@ -839,50 +467,18 @@ static bool dev_caps(struct mesh_io *io, struct mesh_io_caps *caps)
 
 static void send_cancel(struct mesh_io_private *pvt)
 {
-	struct mgmt_cp_remove_advertising remove;
+	struct mgmt_cp_mesh_send_cancel remove;
 
 	if (!pvt)
 		return;
 
-	if (pvt->instance) {
-		char adv_off[] = { 0 };
-		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, pvt->send_idx,
-				sizeof(adv_off), adv_off,
-				NULL, NULL, NULL);
-
-		remove.instance = pvt->instance;
-		//if (0)
+	if (pvt->handle) {
+		remove.handle = pvt->handle;
 		l_debug("Cancel TX");
-		mgmt_send(pvt->mgmt, MGMT_OP_REMOVE_ADVERTISING, pvt->send_idx,
+		mesh_mgmt_send(MGMT_OP_MESH_SEND_CANCEL, pvt->send_idx,
 						sizeof(remove), &remove,
 						NULL, NULL, NULL);
 	}
-
-	/* TODO:  Add MGMT command to set Random Address */
-}
-
-static void next_instance(struct mesh_io_private *pvt)
-{
-	//uint8_t instance = pvt->instance + 1;
-
-	//if (!instance || instance == 255)
-		pvt->instance = 1;
-	//else
-		//pvt->instance++;
-}
-
-static void add_adv_cb(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	//l_debug("Add_Adv Status: %d", status);
-	//print_packet("Add_Adv params", param, length);
-}
-
-static void adv_halt(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	l_debug("Adv Halt Status: %d", status);
-	print_packet("Halt params", param, length);
 }
 
 static void tx_to(struct l_timeout *timeout, void *user_data);
@@ -893,6 +489,8 @@ static void send_queued(uint8_t status, uint16_t length,
 
 	if (status)
 		l_debug("Mesh Send Failed: %d", status);
+	else if (param && length >= 1)
+		pvt->handle = *(uint8_t *) param;
 
 	if (tx->delete) {
 		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
@@ -906,84 +504,27 @@ static void send_queued(uint8_t status, uint16_t length,
 static void send_pkt(struct mesh_io_private *pvt, struct tx_pkt *tx,
 							uint16_t interval)
 {
-	struct mgmt_cp_remove_advertising remove;
-	struct mgmt_cp_add_advertising *add;
-	struct mgmt_cp_mesh_send *send;
-	char advertisable[] = { 1 };
-	uint8_t instance;
+	uint8_t buffer[sizeof(struct mgmt_cp_mesh_send) + tx->len];
+	struct mgmt_cp_mesh_send *send = (void *) buffer;
 	uint16_t index;
 	size_t len;
 
 	if (!pvt)
 		return;
 
-	instance = pvt->instance;
 	index = pvt->send_idx;
 
-	len = sizeof(struct mgmt_cp_mesh_send) + tx->len;
-	send = l_malloc(len);
+	len = sizeof(buffer);
 	memset(send, 0, len);
 	send->addr.type = BDADDR_LE_RANDOM;
 	send->instant = 0;
 	send->delay = 0;
 	send->cnt = 1;
 	memcpy(send->data, tx->pkt, tx->len);
-	mgmt_send(pvt->mgmt, MGMT_OP_MESH_SEND, index,
+	mesh_mgmt_send(MGMT_OP_MESH_SEND, index,
 			len, send, send_queued, tx, NULL);
 	print_packet("Mesh Send Start", tx->pkt, tx->len);
-	l_free(send);
 	pvt->tx = tx;
-	return;
-
-
-	if (instance) {
-		char adv_off[] = { 0 };
-		mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
-				sizeof(adv_off), adv_off,
-				adv_halt, L_UINT_TO_PTR(index), NULL);
-
-		remove.instance = instance;
-		mgmt_send(pvt->mgmt, MGMT_OP_REMOVE_ADVERTISING, index,
-						sizeof(remove), &remove,
-						NULL, NULL, NULL);
-
-	} else
-		l_debug("Adv-Idle");
-
-	next_instance(pvt);
-
-	/* Delete superseded packet in favor of new packet */
-	if (pvt->tx && pvt->tx != tx && pvt->tx->delete) {
-		l_queue_remove_if(pvt->tx_pkts, simple_match, pvt->tx);
-		l_free(pvt->tx);
-	}
-
-	pvt->tx = tx;
-	pvt->interval = interval;
-
-	len = sizeof(struct mgmt_cp_add_advertising) + tx->len + 1;
-	add = (struct mgmt_cp_add_advertising *) l_new(char, len);
-
-	add->instance = pvt->instance;
-	add->duration = 1;
-	add->timeout = 1;
-	add->adv_data_len = tx->len + 1;
-	add->data[0] = tx->len;
-	memcpy(add->data + 1, tx->pkt, tx->len);
-	print_packet("MGMT-Adv", tx->pkt, tx->len);
-	mgmt_send(pvt->mgmt, MGMT_OP_ADD_ADVERTISING, index, len, add,
-							add_adv_cb, NULL, NULL);
-	l_free(add);
-	mgmt_send(pvt->mgmt, MGMT_OP_SET_ADVERTISING, index,
-				sizeof(advertisable), advertisable,
-				adv_set, L_UINT_TO_PTR(index), NULL);
-
-
-	if (tx->delete) {
-		l_queue_remove_if(pvt->tx_pkts, simple_match, tx);
-		l_free(tx);
-		pvt->tx = NULL;
-	}
 }
 
 static void tx_to(struct l_timeout *timeout, void *user_data)
@@ -1195,7 +736,6 @@ static bool recv_register(struct mesh_io *io, const uint8_t *filter,
 	rx_reg->len = len;
 	rx_reg->cb = cb;
 	rx_reg->user_data = user_data;
-	rx_reg->seen = l_queue_new();
 
 	l_queue_push_head(pvt->rx_regs, rx_reg);
 

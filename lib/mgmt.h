@@ -766,6 +766,15 @@ struct mgmt_cp_set_mesh {
 	uint8_t   ad_types[];
 } __packed;
 
+#define MGMT_OP_MESH_READ_FEATURES	0x0058
+struct mgmt_rp_mesh_read_features {
+	uint16_t index;
+	uint8_t	 max_handles;
+	uint8_t	 used_handles;
+	uint8_t	 handles[];
+} __packed;
+
+
 #define MGMT_OP_MESH_SEND		0x0059
 struct mgmt_cp_mesh_send {
 	struct mgmt_addr_info addr;
